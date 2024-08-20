@@ -10,12 +10,10 @@ import (
 // as well a pointer to its right sibling.
 //
 // The structure of a leaf node includes:
-// 1. a fixed-size header, which contains:
-// 		a. the type of node (leaf or internal) (1 byte),
-//			which is the smallest amount of memory that can be addressed independently
-// 		b. the number of keys (2 bytes).
-// 		c. the page id (8 bytes) of our right sibling (or -1 if we don't have a right sibling),
-// 2. A list of KV pairs.
+// 	1. the type of node (leaf or internal) (1 byte)
+// 	2. the number of keys (2 bytes)
+// 	3. the page id (8 bytes) of our right sibling (or -1 if we don't have a right sibling)
+// 	4. A list of KV pairs
 type LeafNode struct {
 	keys []int
 	recordIds []int // TODO: update to RecordId
