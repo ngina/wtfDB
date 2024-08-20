@@ -18,12 +18,12 @@ import (
 // 2. A list of KV pairs.
 type LeafNode struct {
 	keys []int
-	rids []int // TODO: update to RecordId
+	recordIds []int // TODO: update to RecordId
 	rightSibling uint64 // TODO: handle the zero value
 }
 
 func (n LeafNode) toBytes(buf []byte) (error) {
-	if len(n.keys) != len(n.rids) {
+	if len(n.keys) != len(n.recordIds) {
 		return fmt.Errorf("number of keys and record ids have to be equal")
 	}
 
@@ -32,7 +32,7 @@ func (n LeafNode) toBytes(buf []byte) (error) {
 	buf = binary.LittleEndian.AppendUint64(buf, n.rightSibling)
 	for i := range n.keys {
 		buf = binary.LittleEndian.AppendUint64(buf, uint64(n.keys[i]))
-		buf = binary.LittleEndian.AppendUint64(buf, uint64(n.rids[i]))
+		buf = binary.LittleEndian.AppendUint64(buf, uint64(n.recordIds[i]))
 	}
 	return nil
 }
@@ -43,5 +43,5 @@ func fromBytes(data []byte) (LeafNode, error) {
 }
 
 func (n LeafNode) pageSizeInBytes() (int) {
-	return (1 + 2 + 8 + (BTREE_MAX_KEY_SIZE + BTREE_MAX_RID_SIZE) * len(n.keys))
+	return (1 + 2 + 8 + (MaxKeySize + MaxPageSize) * len(n.keys))
 }
