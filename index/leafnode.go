@@ -41,5 +41,5 @@ func fromBytes(data []byte) (LeafNode, error) {
 }
 
 func (n LeafNode) pageSizeInBytes() (int) {
-	return (1 + 2 + 8 + (MaxKeySize + MaxPageSize) * len(n.keys))
+	return (1 + 2 + 8 + (MaxKeySize + MaxRecordIdSize) * len(n.keys))
 }
