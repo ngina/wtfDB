@@ -1,8 +1,8 @@
 package index
 
-const BTREE_PAGE_SIZE = 256 * 1024
-const BTREE_MAX_KEY_SIZE = 64 * 1024
-const BTREE_MAX_RID_SIZE = 128 * 1024
+const MaxPageSize = 256 * 1024
+const MaxKeySize = 64 * 1024
+const MaxRecordIdSize = 128 * 1024
 
 type RecordId struct {
 	page int
