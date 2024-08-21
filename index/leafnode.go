@@ -16,21 +16,23 @@ import (
 //  4. a list of KV pairs
 const LeafFixedHeaderSizeInBytes = 11
 
-type LeafNode struct {
+var LeafNode leafNode
+
+type leafNode struct {
 	keys      []int
 	recordIds []int  // TODO: update to RecordId
 	next      uint64 // TODO: handle the zero value edge case
 }
 
-func (n LeafNode) get(key int) (LeafNode, error) {
-	return LeafNode{}, nil
+func (leafNode) get(key int) (leafNode, error) {
+	return leafNode{}, nil
 }
 
-func (n LeafNode) put(key int, recordId int) error {
+func (n leafNode) put(key int, recordId int) error {
 	return nil
 }
 
-func (n LeafNode) toBytes(buf []byte) error {
+func (n leafNode) toBytes(buf []byte) error {
 	if len(n.keys) != len(n.recordIds) {
 		return fmt.Errorf("number of keys and record ids have to be equal")
 	}
@@ -45,10 +47,10 @@ func (n LeafNode) toBytes(buf []byte) error {
 	return nil
 }
 
-func fromBytes(data []byte) (LeafNode, error) {
+func (leafNode) fromBytes(data []byte) (leafNode, error) {
 	fmt.Printf("provided data %#v", data)
 	if len(data) < LeafFixedHeaderSizeInBytes {
-		return LeafNode{}, fmt.Errorf("page has less than the fixed size header")
+		return leafNode{}, fmt.Errorf("page has less than the fixed size header")
 	}
 
 	keySize := binary.LittleEndian.Uint16(data[1:3])
@@ -66,13 +68,13 @@ func fromBytes(data []byte) (LeafNode, error) {
 		startIndex, endIndex = endIndex, endIndex+9
 	}
 
-	return LeafNode{
+	return leafNode{
 		next:      nextPointer,
 		keys:      keys,
 		recordIds: recordIds,
 	}, nil
 }
 
-func (n LeafNode) pageSizeInBytes() int {
+func (n leafNode) pageSizeInBytes() int {
 	return (1 + 2 + 8 + (MaxKeySize+MaxRecordIdSize)*len(n.keys))
 }
