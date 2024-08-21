@@ -53,14 +53,15 @@ func (innerNode) fromBytes(data []byte) (innerNode, error) {
 	}
 
 	pagePointers := []uint64{}
-	start = InnerFixedHeaderSizeInBytes + keyCount * 8
-	for i := 0; i < keyCount; i++ {
+	pointerCount := keyCount + 1
+	start = InnerFixedHeaderSizeInBytes + keyCount*8
+	for i := 0; i < pointerCount; i++ {
 		pagePointers = append(pagePointers, binary.LittleEndian.Uint64(data[start:start+8]))
 		start = start + 8
 	}
 
 	return innerNode{
-		keys: keys,
+		keys:         keys,
 		pagePointers: pagePointers,
 	}, nil
 }
