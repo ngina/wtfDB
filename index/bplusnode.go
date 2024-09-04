@@ -11,9 +11,9 @@ type RecordId struct {
 
 type BPlusNode interface {
 
-	// n.get(k) returns the leaf node on which k 
+	// n.get(k) returns the leaf node on which k
 	// may reside when queried from n
-	get(key int) (LeafNode, error)
+	get(key int) (leafNode, error)
 
 	//
 	put(key int, recordId RecordId) (int, RecordId)
@@ -21,4 +21,3 @@ type BPlusNode interface {
 	// n.toBytes() serializes n and writes bytes into buf
 	toBytes(buf []byte) error
 }
-

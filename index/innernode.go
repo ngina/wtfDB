@@ -22,6 +22,16 @@ type innerNode struct {
 	pagePointers []uint64
 }
 
+// n.get(k) returns the leaf node on which k may reside when queried from n.
+//
+func (n innerNode) get(key int) (leafNode, error) {
+	return leafNode{}, nil
+}
+
+func (n innerNode) put(key int, recordId int) (error) {
+	
+}
+
 // toBytes serializes an inner node to a []byte
 func (n innerNode) toBytes(buf []byte) ([]byte, error) {
 	if len(n.pagePointers) != len(n.keys)+1 {
@@ -42,6 +52,10 @@ func (n innerNode) toBytes(buf []byte) ([]byte, error) {
 func (innerNode) fromBytes(data []byte) (innerNode, error) {
 	if len(data) < InnerFixedHeaderSizeInBytes {
 		return innerNode{}, fmt.Errorf("inner node page has less than the fixed size header")
+	}
+
+	if data[0] != byte(0) {
+		return innerNode{}, fmt.Errorf("not an inner node")
 	}
 
 	keys := []int{}
