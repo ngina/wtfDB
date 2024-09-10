@@ -7,17 +7,17 @@ const (
 )
 
 type DiskManager interface {
-	writePage(pageNumber uint64, contents []byte) error
-	readPage(pageNumber uint64, p []byte) error
+	WritePage(pageNumber int, contents []byte) error
+	ReadPage(pageNumber int, p []byte) error
 }
 
 type DefaultDiskManager struct{}
 
-func (d DefaultDiskManager) writePage(pageNumber uint64, contentsToWrite []byte) error {
+func (d DefaultDiskManager) writePage(pageNumber int, contentsToWrite []byte) error {
 	return nil
 }
 
-func (d DefaultDiskManager) readPage(pageNumber uint64, buf []byte) error {
+func (d DefaultDiskManager) readPage(pageNumber int, buf []byte) error {
 	return nil
 }
 
