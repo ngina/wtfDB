@@ -3,6 +3,7 @@ package memory
 import (
 	"fmt"
 	"time"
+	"container/list"
 )
 
 // Interface for an eviction policy.
@@ -41,13 +42,45 @@ type LRUKEvictionPolicy struct {
 	k          int
 	size       int              // tracks the number of evictable frames
 	candidates map[int]LRUKNode // map of frame id to lru-k node
+	leastRecentlyUsed list.List // doubly-linked list between frames in ascending access/use order
 }
 
 // Evict the frame that has the largest backward k-distance compared
 // to all other evictable frames being tracked. Return frame id.
 // If no frames can be evicted, return an error.
+//
+// Calculate backward k-distance as the difference in time between the current
+// timestamp and the timestamp of kth previous access
 func (lru *LRUKEvictionPolicy) evict(frames []Frame) (int, error) {
-	return 0, nil
+	frameId, err := lru.hasLargestKDist()
+	if err != nil {
+		return frameId, nil
+	}
+	curr := lru.leastRecentlyUsed.Front()
+	for curr != nil && (!curr.Value.(LRUKNode).isEvictable) {
+		curr = curr.Next() 
+	}
+	return curr.Value.(LRUKNode).frameId, nil
+}
+
+func (lru *LRUKEvictionPolicy) hasLargestKDist() (int, error) {
+	longestK := -1
+	frameId := -1
+	for i := 0; i < len(lru.candidates); i++ {
+		node := lru.candidates[i]
+		n := len(node.history)
+		if node.isEvictable && n >= lru.k {
+			kInterval := int(node.history[n-1]) - int(node.history[lru.k-1])
+			if longestK < kInterval {
+				longestK = kInterval
+				frameId = node.frameId
+			}
+		}
+	}
+	if longestK > -1 {
+		return frameId, nil
+	}
+	return frameId, fmt.Errorf("cannot evict anything -- everything is pinned or no access history")
 }
 
 // Record that the given frame has been accessed at the current timestamp
@@ -55,26 +88,43 @@ func (lru *LRUKEvictionPolicy) evict(frames []Frame) (int, error) {
 // when the frame/page that is being read from/written to.
 func (lru *LRUKEvictionPolicy) recordAccess(id int) {
 	current_timestamp := time.Now().UTC().UnixMilli()
-	if node, ok := lru.candidates[id]; ok {
+	node, ok := lru.candidates[id]
+	if ok {
 		node.history = append(node.history, current_timestamp)
 	} else {
-		lru.candidates[id] = LRUKNode{
+		node = LRUKNode{
 			frameId: id,
 			history: []int64{current_timestamp},
 			k:       lru.k,
 		}
+		lru.candidates[id] = node
 	}
+	// Move accessed page that is being read to/written from 
+	// to the back of the list
+	lru.leastRecentlyUsed.MoveToBack(&list.Element{Value: node})
 }
+
+func (lru *LRUKEvictionPolicy) initLRUKNode(id int) {
+	current_timestamp := time.Now().UTC().UnixMilli()
+	lru.candidates[id] = LRUKNode{
+			frameId: id,
+			history: []int64{current_timestamp},
+			k:       lru.k,
+	}
+	lru.leastRecentlyUsed.PushBack(lru.candidates[id])
+}  
 
 // Clear all access history associated with a frame. This method should be
 // called only when a page is deleted in the buffer pool.
 func (lru *LRUKEvictionPolicy) remove(id int) {
-	if lruNode, ok := lru.candidates[id]; ok {
-		if !lruNode.isEvictable {
+	node, ok := lru.candidates[id]
+	if ok {
+		if !node.isEvictable {
 			lru.setEvictable(id, true)
 		}
 	}
 	delete(lru.candidates, id)
+	lru.leastRecentlyUsed.Remove(&list.Element{Value: node})
 }
 
 // Controls whether a frame is evictable or not. It also controls the LRUKReplacer's size.
