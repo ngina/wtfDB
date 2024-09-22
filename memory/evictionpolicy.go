@@ -1,22 +1,24 @@
 package memory
 
 import (
+	"container/list"
 	"fmt"
 	"time"
-	"container/list"
 )
 
 // Interface for an eviction policy.
 //
-// When the database server needs to free up a frame to make room
-// for a new page, it must decide which page to evict from the buffer pool.
-// Eviction Policy decides which page/frame to evict out of the buffer pool,
-// when the pool is full.
+// When the database server needs to free up a frame to make room for a new page,
+// it must decide which page to evict from the buffer pool. Eviction Policy decides
+// which page/frame to evict out of the buffer pool, when the pool is full.
 type EvictionPolicy interface {
 	evict([]Frame) (int, error)
 }
 
-// LRUKEvictionPolicy implements the LRU-k replacement policy.
+// LRUKEvictionPolicy implements the LRU-k replacement/eviction policy.
+//
+// LRUKEvictionPolicy keeps track of when pages are accessed to that
+// it can decide which frame to evict when it must make room for a new page.
 //
 // The LRU-K algorithm evicts a frame whose backward k-distance is the
 // maximum of all frames in the buffer pool. Backward k-distance is
@@ -26,23 +28,19 @@ type EvictionPolicy interface {
 // A frame with less than k historical references is given
 // +inf as its backward k-distance. When multiple frames have
 // +inf backward k-distance, classical LRU algorithm is used to choose victim.
-//
-// Tracks the history of the last K references to each page as timestamps
-// and computes the interval between subsequent accesses. It uses this history
-// to estimate the next time that page is going to be accessed.
-
 type LRUKNode struct {
-	history     []int64
+	history     []int64 //History of last seen K timestamps of this page. Least recent timestamp stored in front.
 	k           int
 	frameId     int
 	isEvictable bool
 }
 
-type LRUKEvictionPolicy struct {
-	k          int
-	size       int              // tracks the number of evictable frames
-	candidates map[int]LRUKNode // map of frame id to lru-k node
-	leastRecentlyUsed list.List // doubly-linked list between frames in ascending access/use order
+type LRUKReplacer struct {
+	k                 int
+	maxSize           int              // the maximum number of frames the LRUKReplacer will be required t
+	size              int              // stores the replacers size, which tracks the number of evictable frames
+	candidates        map[int]LRUKNode // map of frame id to lru-k node
+	leastRecentlyUsed list.List        // doubly-linked list between frames in ascending access/use order
 }
 
 // Evict the frame that has the largest backward k-distance compared
@@ -51,19 +49,19 @@ type LRUKEvictionPolicy struct {
 //
 // Calculate backward k-distance as the difference in time between the current
 // timestamp and the timestamp of kth previous access
-func (lru *LRUKEvictionPolicy) evict(frames []Frame) (int, error) {
+func (lru *LRUKReplacer) evict(frames []Frame) (int, error) {
 	frameId, err := lru.hasLargestKDist()
 	if err != nil {
 		return frameId, nil
 	}
 	curr := lru.leastRecentlyUsed.Front()
 	for curr != nil && (!curr.Value.(LRUKNode).isEvictable) {
-		curr = curr.Next() 
+		curr = curr.Next()
 	}
 	return curr.Value.(LRUKNode).frameId, nil
 }
 
-func (lru *LRUKEvictionPolicy) hasLargestKDist() (int, error) {
+func (lru *LRUKReplacer) hasLargestKDist() (int, error) {
 	longestK := -1
 	frameId := -1
 	for i := 0; i < len(lru.candidates); i++ {
@@ -83,59 +81,57 @@ func (lru *LRUKEvictionPolicy) hasLargestKDist() (int, error) {
 	return frameId, fmt.Errorf("cannot evict anything -- everything is pinned or no access history")
 }
 
-// Record that the given frame has been accessed at the current timestamp
+// Record that the given frame/page has been accessed at the current timestamp
 // This method should be called after a page has been pinned in the buffer pool,
-// when the frame/page that is being read from/written to.
-func (lru *LRUKEvictionPolicy) recordAccess(id int) {
+// for the frame/page that is being read from/written to.
+func (lru *LRUKReplacer) recordAccess(frameId int) {
 	current_timestamp := time.Now().UTC().UnixMilli()
-	node, ok := lru.candidates[id]
+	node, ok := lru.candidates[frameId]
 	if ok {
 		node.history = append(node.history, current_timestamp)
 	} else {
 		node = LRUKNode{
-			frameId: id,
+			frameId: frameId,
 			history: []int64{current_timestamp},
 			k:       lru.k,
 		}
-		lru.candidates[id] = node
+		lru.candidates[frameId] = node
 	}
-	// Move accessed page that is being read to/written from 
+	// Move accessed page that is being read to/written from
 	// to the back of the list
 	lru.leastRecentlyUsed.MoveToBack(&list.Element{Value: node})
 }
 
-func (lru *LRUKEvictionPolicy) initLRUKNode(id int) {
+func (lru *LRUKReplacer) initLRUKNode(frameId int) {
 	current_timestamp := time.Now().UTC().UnixMilli()
-	lru.candidates[id] = LRUKNode{
-			frameId: id,
-			history: []int64{current_timestamp},
-			k:       lru.k,
+	lru.candidates[frameId] = LRUKNode{
+		frameId: frameId,
+		history: []int64{current_timestamp},
+		k:       lru.k,
 	}
-	lru.leastRecentlyUsed.PushBack(lru.candidates[id])
-}  
+	lru.leastRecentlyUsed.PushBack(lru.candidates[frameId])
+}
 
 // Clear all access history associated with a frame. This method should be
 // called only when a page is deleted in the buffer pool.
-func (lru *LRUKEvictionPolicy) remove(id int) {
-	node, ok := lru.candidates[id]
+func (lru *LRUKReplacer) remove(frameId int) {
+	node, ok := lru.candidates[frameId]
 	if ok {
 		if !node.isEvictable {
-			lru.setEvictable(id, true)
+			lru.setEvictable(frameId, true)
 		}
 	}
-	delete(lru.candidates, id)
+	delete(lru.candidates, frameId)
 	lru.leastRecentlyUsed.Remove(&list.Element{Value: node})
 }
 
 // Controls whether a frame is evictable or not. It also controls the LRUKReplacer's size.
 // When the pin count of a page hits 0, its corresponding frame should be marked as evictable.
-func (lru *LRUKEvictionPolicy) setEvictable(id int, b bool) {
+func (lru *LRUKReplacer) setEvictable(id int, b bool) {
 	if node, ok := lru.candidates[id]; ok {
 		node.isEvictable = b
 		if b {
 			lru.size++
-		} else {
-			lru.size--
 		}
 	}
 }
