@@ -8,28 +8,32 @@ import (
 	"time"
 )
 
-// Interface for an eviction policy.
-//
-// When the database server needs to free up a frame to make room for a new page,
-// it must decide which page to evict from the buffer pool. Eviction Policy decides
-// which page/frame to evict out of the buffer pool, when the pool is full.
+/*
+Interface for an eviction policy.
+
+When the database server needs to free up a frame to make room for a new page,
+it must decide which page to evict from the buffer pool. Eviction Policy decides
+which page/frame to evict out of the buffer pool, when the pool is full.
+*/
 type EvictionPolicy interface {
 	evict([]Frame) (int, error)
 }
 
-// LRUKEvictionPolicy implements the LRU-k replacement/eviction policy.
-//
-// LRUKEvictionPolicy keeps track of when pages are accessed to that
-// it can decide which frame to evict when it must make room for a new page.
-//
-// The LRU-K algorithm evicts a frame whose backward k-distance is the
-// maximum of all frames in the buffer pool. Backward k-distance is
-// computed as the difference in time between the current timestamp and
-// the timestamp of kth previous access.
-//
-// A frame with less than k historical references is given
-// +inf as its backward k-distance. When multiple frames have
-// +inf backward k-distance, classical LRU algorithm is used to choose victim.
+/*
+LRUKEvictionPolicy implements the LRU-k replacement/eviction policy.
+
+LRUKEvictionPolicy keeps track of when pages are accessed to that
+it can decide which frame to evict when it must make room for a new page.
+
+The LRU-K algorithm evicts a frame whose backward k-distance is the
+maximum of all frames in the buffer pool. Backward k-distance is
+computed as the difference in time between the current timestamp and
+the timestamp of kth previous access.
+
+A frame with less than k historical references is given
++inf as its backward k-distance. When multiple frames have
++inf backward k-distance, classical LRU algorithm is used to choose victim.
+*/
 type LruKFrameMetadata struct {
 	history     []int64       // History of last seen K timestamps of this page. Least recent timestamp stored in front.
 	isEvictable bool          // true if frame is not pinned
@@ -44,12 +48,14 @@ type LruKReplacer struct {
 	lru           *list.List                // doubly-linked list between frames in ascending access/use order
 }
 
-// Evict the frame that has the largest backward k-distance compared
-// to all other evictable frames being tracked. Return frame id.
-// If no frames can be evicted, return an error.
-//
-// Calculate backward k-distance as the difference in time between the current
-// timestamp and the timestamp of kth previous access
+/*
+Evict the frame that has the largest backward k-distance compared
+to all other evictable frames being tracked. Return frame id.
+If no frames can be evicted, return an error.
+
+Calculate backward k-distance as the difference in time between the current
+timestamp and the timestamp of kth previous access
+*/
 func (lruK *LruKReplacer) evict() (int, error) {
 	frameId, err := lruK.hasLargestKInterval()
 	if err == nil {
@@ -63,6 +69,32 @@ func (lruK *LruKReplacer) evict() (int, error) {
 		}
 	}
 	return -1, err
+}
+
+/*
+Record that the given frame/page has been accessed at the current timestamp
+This method should be called after a page has been pinned in the buffer pool,
+for the frame/page that is being read from/written to.
+*/
+func (lruK *LruKReplacer) recordAccess(frameId int) {
+	fmt.Printf("frame id: %d, current time: %+v\n", frameId, time.Now().UTC())
+	current_timestamp := time.Now().UTC().UnixMilli()
+	_, ok := lruK.metadataStore[frameId]
+	if ok {
+		meta := lruK.metadataStore[frameId]
+		meta.history = append(meta.history, current_timestamp)
+		lruK.metadataStore[frameId] = meta
+
+		// Move accessed page that is being read /written to the back of the list
+		lruK.lru.MoveToBack(meta.e)
+	} else {
+		e := lruK.lru.PushBack(frameId)
+		lruK.metadataStore[frameId] = LruKFrameMetadata{
+			history: []int64{current_timestamp},
+			e:       e,
+		}
+		fmt.Printf("inserted into lru: %+v\n", e.Value)
+	}
 }
 
 // A frame with fewer than k historical accesses is given +inf as its backward k-distance.
@@ -132,30 +164,6 @@ func (lruK *LruKReplacer) getLRUFrame() (int, error) {
 		curr = curr.Next()
 	}
 	return -1, fmt.Errorf("cannot evict anything")
-}
-
-// Record that the given frame/page has been accessed at the current timestamp
-// This method should be called after a page has been pinned in the buffer pool,
-// for the frame/page that is being read from/written to.
-func (lruK *LruKReplacer) recordAccess(frameId int) {
-	fmt.Printf("frame id: %d, current time: %+v\n", frameId, time.Now().UTC())
-	current_timestamp := time.Now().UTC().UnixMilli()
-	_, ok := lruK.metadataStore[frameId]
-	if ok {
-		meta := lruK.metadataStore[frameId]
-		meta.history = append(meta.history, current_timestamp)
-		lruK.metadataStore[frameId] = meta
-
-		// Move accessed page that is being read /written to the back of the list
-		lruK.lru.MoveToBack(meta.e)
-	} else {
-		e := lruK.lru.PushBack(frameId)
-		lruK.metadataStore[frameId] = LruKFrameMetadata{
-			history: []int64{current_timestamp},
-			e:       e,
-		}
-		fmt.Printf("inserted into lru: %+v\n", e.Value)
-	}
 }
 
 // Clear all access history associated with a frame. This method should be
