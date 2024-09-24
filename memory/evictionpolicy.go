@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 )
 
@@ -57,18 +56,12 @@ Successful eviction of a frame decrements the size of replacer and removes the f
 access history.
 */
 func (lruK *LruKReplacer) evict() (int, error) {
-	frameId, err := lruK.hasLargestKInterval()
-	if err == nil {
-		return frameId, nil
+	frameId := lruK.maxBackwardKDistance()
+	if frameId == -1 {
+		return -1, fmt.Errorf("cannot evict anything -- everything is pinned")
 	}
-	if strings.HasPrefix(err.Error(), "insufficient historical access data") {
-		lruFrameId, err := lruK.getLRUFrame()
-		if err == nil {
-			lruK.cleanup(lruFrameId)
-			return lruFrameId, err
-		}
-	}
-	return -1, err
+	lruK.cleanup(frameId)
+	return frameId, nil
 }
 
 /*
@@ -87,8 +80,6 @@ func (lruK *LruKReplacer) recordAccess(frameId int) {
 		m := lruK.metadataStore[frameId]
 		m.history = append(m.history, current_timestamp)
 		lruK.metadataStore[frameId] = m
-
-		// Move accessed page that is being read /written to the back of the list
 		lruK.lru.MoveToBack(m.e)
 		fmt.Printf("updated in lru: %+v\n", m.e.Value)
 	} else {
@@ -101,77 +92,25 @@ func (lruK *LruKReplacer) recordAccess(frameId int) {
 	}
 }
 
-// A frame with fewer than k historical accesses is given +inf as its backward k-distance.
-// If multiple frames have +inf backward k-distance, the replacer evicts the frame
-// with the earliest overall timestamp.
-func (lruK *LruKReplacer) hasLargestKInterval() (int, error) {
-	fmt.Println("#### beginning hasLargestKInterval()")
-	longestK, frameId := -1, -1
-	countInf := 0 // count num of backward k distance that are +inf
-	for k := range lruK.metadataStore {
-		fmt.Printf("--frame metadata: %+v %+v\n", k, lruK.metadataStore[k])
-		// Exit loop early if there exists at least half the number of evictable pages with +inf backward k-distance
-		if countInf >= lruK.size/2 {
-			break
+/*
+Controls whether a frame is evictable or not. It also controls the replacers's size.
+Decrements replacer's size when marking an evictable frame as non-evictable and
+increments size when marking a non-evictable frame as evictable.
+When the pin count of a page hits 0, its corresponding frame should be marked as evictable.
+*/
+func (lruK *LruKReplacer) setEvictable(frameId int, setEvictable bool) {
+	if m, ok := lruK.metadataStore[frameId]; ok {
+		if m.isEvictable && !setEvictable {
+			m.isEvictable = setEvictable
+			lruK.metadataStore[frameId] = m
+			lruK.size--
 		}
-		kInterval, err := lruK.getBackwardKDistance(k)
-		fmt.Printf("--backward k distance: %+v %+v\n", kInterval, err)
-		// Has fewer than k historical accesses is given +inf as its backward k-distance
-		if err == nil && kInterval == math.MaxInt {
-			// move frames with +inf backward k distance to the front
-			countInf++
-			continue
-		}
-		if longestK < kInterval {
-			longestK = kInterval
-			frameId = k
+		if !m.isEvictable && setEvictable {
+			m.isEvictable = setEvictable
+			lruK.metadataStore[frameId] = m
+			lruK.size++
 		}
 	}
-
-	// Check if there is multiple frames with +inf backward k distance
-	fmt.Printf("count inf: %d\n", countInf)
-	if countInf > 0 && countInf <= lruK.size {
-		fmt.Printf("count inf is: %d\n", countInf)
-		return -1, fmt.Errorf("insufficient historical access data; multiple frames have +inf backward k distance")
-	}
-	if longestK > -1 {
-		return frameId, nil
-	}
-	return frameId, fmt.Errorf("cannot evict anything -- everything is pinned or no access history")
-}
-
-// Calculate the backward k-distance of the frame/page with the given frame id.
-// If the frame has fewer than k historical accesses is given +inf as its backward k-distance.
-// If the frame is pinned, return an error.
-func (lruK *LruKReplacer) getBackwardKDistance(frameId int) (int, error) {
-	node := lruK.metadataStore[frameId]
-	n := len(node.history)
-	backwardKDist := math.MaxInt // has fewer than k historical accesses is given +inf
-	if node.isEvictable {
-		if n >= lruK.k { // contains at least k historical accesses
-			backwardKDist = int(node.history[n-1]) - int(node.history[lruK.k-1])
-		}
-	} else {
-		return -1, fmt.Errorf("cannot be evicted -- in use/pinned")
-	}
-	return backwardKDist, nil
-}
-
-// Return the frame id of the frame that has been least recently used.
-// If all frames are pinned, return an error.
-func (lruK *LruKReplacer) getLRUFrame() (int, error) {
-	fmt.Println("## beginning getLRUFrame()")
-	curr := lruK.lru.Front()
-	for curr != nil {
-		if frameId, ok := curr.Value.(int); ok {
-			if lruK.metadataStore[frameId].isEvictable && len(lruK.metadataStore[frameId].history) < lruK.k {
-				fmt.Printf("lru selected candidate: %d\n", frameId)
-				return frameId, nil
-			}
-		}
-		curr = curr.Next()
-	}
-	return -1, fmt.Errorf("cannot evict anything")
 }
 
 /*
@@ -183,9 +122,8 @@ This is different from evicting a frame, which always removes the frame
 with largest backward k-distance. This function removes specified frame id,
 no matter what its backward k-distance is.
 
-If Remove is called on a non-evictable frame, return an error.
-
-If specified frame is not found in metadata store, directly return.
+If Remove is called on a non-evictable frame, return an error. If specified frame is
+not found in metadata store, directly return.
 
 This method should be called only when a page is deleted in the buffer pool.
 */
@@ -204,23 +142,78 @@ func (lruK *LruKReplacer) remove(frameId int) error {
 	return nil
 }
 
-// Controls whether a frame is evictable or not. It also controls the replacers's size.
-// Decrements replacer's size when marking an evictable frame as non-evictable and 
-// increments size when marking a non-evictable frame as evictable.
-// When the pin count of a page hits 0, its corresponding frame should be marked as evictable.
-func (lruK *LruKReplacer) setEvictable(frameId int, setEvictable bool) {
-	if m, ok := lruK.metadataStore[frameId]; ok {
-		if m.isEvictable && !setEvictable {
-			m.isEvictable = setEvictable
-			lruK.metadataStore[frameId] = m
-			lruK.size--
+/*
+Returns the frame with the maximum backward k-distance.
+This is the frame that is a candidate for eviction.
+
+A frame with fewer than k historical accesses is given +inf as its backward k-distance.
+If multiple frames have +inf backward k-distance, the replacer evicts the frame
+with the earliest overall timestamp.
+*/
+func (lruK *LruKReplacer) maxBackwardKDistance() int {
+	fmt.Println("#### beginning hasLargestKInterval()")
+	maxK, frameId, breakTie := -1, -1, false
+
+	// For each evictable frame, get the backward k-distance.
+	// Store frame with greatest backward k-distance in each iteration
+	// Set breakTie flag to true, if there exists at least two frames with equal max backward k-distance
+	for k := range lruK.metadataStore {
+		fmt.Printf("--frame metadata: %+v %+v\n", k, lruK.metadataStore[k])
+		if !lruK.metadataStore[k].isEvictable {
+			fmt.Println("frame is non-evictable, ignore")
+			continue
 		}
-		if !m.isEvictable && setEvictable {
-			m.isEvictable = setEvictable
-			lruK.metadataStore[frameId] = m
-			lruK.size++
+		backwardKDist := lruK.getBackwardKDistance(k)
+		fmt.Printf("--backward k distance: %+v\n", backwardKDist)
+		if maxK < backwardKDist {
+			fmt.Printf("update largest k interval: interval: %+v, frame id: %+v\n", backwardKDist, k)
+			maxK = backwardKDist
+			frameId = k
+			breakTie = false // reset with each greater pass
+		} else if maxK != -1 && maxK == backwardKDist {
+			fmt.Println("there is a tie")
+			breakTie = true
 		}
 	}
+	if breakTie {
+		frameId = lruK.getLRUFrame(maxK)
+	}
+	return frameId
+}
+
+// Calculate the backward k-distance of the frame/page with the given frame id.
+// If the frame has fewer than k historical accesses is given +inf as its backward k-distance.
+// If the frame is non-evictable/pinned, return an error.
+func (lruK *LruKReplacer) getBackwardKDistance(frameId int) int {
+	node := lruK.metadataStore[frameId]
+	n := len(node.history)
+	backwardKDist := math.MaxInt // has fewer than k historical accesses is given +inf
+	if node.isEvictable {
+		if n >= lruK.k { // contains at least k historical accesses
+			backwardKDist = int(node.history[n-1]) - int(node.history[lruK.k-1])
+		}
+	} else {
+		return -1
+	}
+	return backwardKDist
+}
+
+// Return the frame id of the frame that has been least recently used.
+// If all frames are pinned, return an error.
+func (lruK *LruKReplacer) getLRUFrame(backwardKDist int) int {
+	fmt.Println("## beginning getLRUFrame()")
+	curr := lruK.lru.Front()
+	for curr != nil {
+		if frameId, ok := curr.Value.(int); ok {
+			// get first frame occurrence with backward k distance matching
+			if lruK.metadataStore[frameId].isEvictable && lruK.getBackwardKDistance(frameId) == backwardKDist {
+				fmt.Printf("lru selected candidate: %d\n", frameId)
+				return frameId
+			}
+		}
+		curr = curr.Next()
+	}
+	return -1
 }
 
 func (lruK *LruKReplacer) cleanup(frameId int) {
