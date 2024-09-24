@@ -3,6 +3,7 @@ package memory
 import (
 	"container/list"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -86,6 +87,48 @@ func Test_recordAndEvict(t *testing.T) {
 	fid, err = lruK.evict()
 	assertEqual(t, 5, fid, errMessage(err))
 	assertEqual(t, 1, lruK.size, "no. of evictable frames should be 1")
+
+	// Update the access history for frame 1 and make it evictable
+	// Now we have [4,1].
+	lruK.recordAccess(1)
+	lruK.recordAccess(1)
+	lruK.setEvictable(1, true)
+	assertEqual(t, 2, lruK.size, "no. of evictable frames should be 2")
+
+	// Evict the last two frames. Now we have [].
+	fid, err = lruK.evict()
+	assertEqual(t, 4, fid, errMessage(err))
+	fid, err = lruK.evict()
+	assertEqual(t, 1, fid, errMessage(err))
+	assertEqual(t, 0, lruK.size, "there aren't any evictable frames")
+
+	// Insert frame 1 again and mark it as non-evictable.
+	lruK.recordAccess(1)
+	lruK.setEvictable(1, false)
+	assertEqual(t, 0, lruK.size, "there aren't any evictable frames")
+
+	// Attempt to evict a frame
+	_, err = lruK.evict()
+	assertEqual(t, true, strings.HasPrefix(err.Error(), "cannot evict anything"), errMessage(err))
+	assertEqual(t, 0, lruK.size, "there aren't any evictable frames")
+
+	// Mark frame 1 as evictable and evict it
+	lruK.setEvictable(1, true)
+	assertEqual(t, 1, lruK.size, "no. of evictable frames should be 1")
+	fid, err = lruK.evict()
+	assertEqual(t, 1, fid, errMessage(err))
+	assertEqual(t, 0, lruK.size, "there aren't any evictable frames")
+
+	// There is nothing left in the replacer, ensure evict() doesn't return anything strange
+	fid, err = lruK.evict()
+	assertEqual(t, true, strings.HasPrefix(err.Error(), "cannot evict anything"), errMessage(err))
+	assertEqual(t, -1, fid, errMessage(err))
+
+	// Make sure that setting a non-existent frame as evictable or non-evictable doesn't do something strange.
+	lruK.setEvictable(1, true)
+	assertEqual(t, 0, lruK.size, "there aren't any evictable frames")
+	lruK.setEvictable(1, true)
+	assertEqual(t, 0, lruK.size, "there aren't any evictable frames")
 
 }
 
