@@ -1,47 +1,89 @@
 package io
 
-const (
-	// MaxPageSize is the max page size of the db is 4K bytes,
-	// which is the typical OS page size.
-	MaxPageSize = 4 * 1024
+import (
+	"fmt"
+	"io"
+	"log"
+	"os"
 )
 
+const (
+	// MaxPageSize is the max data page size of the db is 4K bytes,
+	// which is the typical OS page size.
+	PageSize = 4 * 1024
+)
+
+var ErrorReadFromDisk = fmt.Errorf("error when reading from disk")
+var ErrorWriteToDisk = fmt.Errorf("error writing to disk file")
+var ErrorFlushToDisk = fmt.Errorf("file contents not flushed to disk")
+
+/*
+DiskManager is responsible for allocating and deallocating pages on disk.
+
+It also reads and writes pages from and to disk, providing a logical file layer
+within the context of a DBMS.
+*/
 type DiskManager interface {
-	WritePage(pageNumber int, contents []byte) error
-	ReadPage(pageNumber int, p []byte) error
+	WritePage(pageId int, data []byte) error
+	ReadPage(pageId int, buf []byte) error
 }
 
-type DefaultDiskManager struct{}
+type DefaultDiskManager struct {
+	db_file    *os.File
+	writeCount int
+}
 
-func (d DefaultDiskManager) writePage(pageNumber int, contentsToWrite []byte) error {
+/*
+Creates a new disk manager that writes to the specified database file.
+*/
+func NewDiskManager(fileName string) DiskManager {
+	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		log.Fatal("cannot open db file: " + err.Error())
+	}
+
+	return &DefaultDiskManager{
+		db_file: f,
+	}
+}
+
+func (d *DefaultDiskManager) Shutdown() {
+	if err := d.db_file.Close(); err != nil {
+		log.Println("failed to close database file during shutdown")
+	}
+}
+
+// WritePage writes the page data of the specified file to the disk file.
+// It takes a page number and a slice of bytes to be written to the page.
+// It returns an error if it cannot write to the page.
+func (d *DefaultDiskManager) WritePage(pageNumber int, pageData []byte) error {
+	d.writeCount++
+	offset := pageNumber * PageSize
+	_, err := d.db_file.WriteAt(pageData, int64(offset))
+	if err != nil {
+		log.Printf("error writing to file at offset %d", offset)
+		return ErrorWriteToDisk
+	}
+
+	// Explicitly flush file buffer content to disk.
+	err = d.db_file.Sync()
+	if err != nil {
+		return ErrorFlushToDisk
+	}
 	return nil
 }
 
-func (d DefaultDiskManager) readPage(pageNumber int, buf []byte) error {
+// Read the contents of the specified page from disk into the byte buffer
+func (d *DefaultDiskManager) ReadPage(pageNumber int, buf []byte) error {
+	offset := pageNumber * PageSize
+	n, err := d.db_file.ReadAt(buf, int64(offset))
+	log.Printf("read bytes %d from page %d", n, pageNumber)
+	if err != nil && err != io.EOF {
+		log.Printf("error when writing to disk page %d", pageNumber)
+		return ErrorReadFromDisk
+	}
+	if err == io.EOF && n < PageSize {
+		log.Printf("i/o error: read hit end of file at offset %d, missing %d bytes", offset, PageSize - n)
+	}
 	return nil
 }
-
-// toFile saves buffer data to disk.
-// Creates file if it does not exist, or truncates the exisiting one before
-// writing the content.
-//
-// This function is not atomic and concurrent readers may get half updated data.
-// func (d DefaultDiskManager) toFile(path string, buf []byte) error {
-// 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0664)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer f.Close()
-
-// 	_, err = f.Write(buf)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// Explicitly flush file buffer content to disk.
-// 	return f.Sync()
-// }
-
-// func (d DefaultDiskManager) fromFile(path string, buf []byte) error {
-// 	return nil
-// }
