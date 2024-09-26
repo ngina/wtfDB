@@ -13,9 +13,9 @@ const (
 	PageSize = 4 * 1024
 )
 
-var ErrorReadFromDisk = fmt.Errorf("error when reading from disk")
-var ErrorWriteToDisk = fmt.Errorf("error writing to disk file")
-var ErrorFlushToDisk = fmt.Errorf("file contents not flushed to disk")
+var ErrorReadFromDisk = fmt.Errorf("error reading from disk")
+var ErrorWriteToDisk = fmt.Errorf("error writing to disk")
+var ErrorFlushToDisk = fmt.Errorf("page contents not flushed to disk")
 
 /*
 DiskManager is responsible for allocating and deallocating pages on disk.
@@ -29,7 +29,7 @@ type DiskManager interface {
 }
 
 type DefaultDiskManager struct {
-	db_file    *os.File
+	dbFile    *os.File
 	writeCount int
 }
 
@@ -43,12 +43,12 @@ func NewDiskManager(fileName string) DiskManager {
 	}
 
 	return &DefaultDiskManager{
-		db_file: f,
+		dbFile: f,
 	}
 }
 
 func (d *DefaultDiskManager) Shutdown() {
-	if err := d.db_file.Close(); err != nil {
+	if err := d.dbFile.Close(); err != nil {
 		log.Println("failed to close database file during shutdown")
 	}
 }
@@ -56,17 +56,17 @@ func (d *DefaultDiskManager) Shutdown() {
 // WritePage writes the page data of the specified file to the disk file.
 // It takes a page number and a slice of bytes to be written to the page.
 // It returns an error if it cannot write to the page.
-func (d *DefaultDiskManager) WritePage(pageId int, pageData []byte) error {
+func (d *DefaultDiskManager) WritePage(pageId int, data []byte) error {
 	d.writeCount++
 	offset := pageId * PageSize
-	_, err := d.db_file.WriteAt(pageData, int64(offset))
+	_, err := d.dbFile.WriteAt(data, int64(offset))
 	if err != nil {
 		log.Printf("error writing to file at offset %d", offset)
 		return ErrorWriteToDisk
 	}
 
 	// Explicitly flush file buffer content to disk.
-	err = d.db_file.Sync()
+	err = d.dbFile.Sync()
 	if err != nil {
 		return ErrorFlushToDisk
 	}
@@ -76,14 +76,14 @@ func (d *DefaultDiskManager) WritePage(pageId int, pageData []byte) error {
 // Read the contents of the specified page from disk into the byte buffer
 func (d *DefaultDiskManager) ReadPage(pageId int, buf []byte) error {
 	offset := pageId * PageSize
-	n, err := d.db_file.ReadAt(buf, int64(offset))
+	n, err := d.dbFile.ReadAt(buf, int64(offset))
 	log.Printf("read bytes %d from page %d", n, pageId)
 	if err != nil && err != io.EOF {
 		log.Printf("error when writing to disk page %d", pageId)
 		return ErrorReadFromDisk
 	}
 	if err == io.EOF && n < PageSize {
-		log.Printf("i/o error: read hit end of file at offset %d, missing %d bytes", offset, PageSize - n)
+		log.Printf("i/o error: read hit end of file at offset %d, missing %d bytes", offset, PageSize-n)
 	}
 	return nil
 }
