@@ -56,9 +56,9 @@ func (d *DefaultDiskManager) Shutdown() {
 // WritePage writes the page data of the specified file to the disk file.
 // It takes a page number and a slice of bytes to be written to the page.
 // It returns an error if it cannot write to the page.
-func (d *DefaultDiskManager) WritePage(pageNumber int, pageData []byte) error {
+func (d *DefaultDiskManager) WritePage(pageId int, pageData []byte) error {
 	d.writeCount++
-	offset := pageNumber * PageSize
+	offset := pageId * PageSize
 	_, err := d.db_file.WriteAt(pageData, int64(offset))
 	if err != nil {
 		log.Printf("error writing to file at offset %d", offset)
@@ -74,12 +74,12 @@ func (d *DefaultDiskManager) WritePage(pageNumber int, pageData []byte) error {
 }
 
 // Read the contents of the specified page from disk into the byte buffer
-func (d *DefaultDiskManager) ReadPage(pageNumber int, buf []byte) error {
-	offset := pageNumber * PageSize
+func (d *DefaultDiskManager) ReadPage(pageId int, buf []byte) error {
+	offset := pageId * PageSize
 	n, err := d.db_file.ReadAt(buf, int64(offset))
-	log.Printf("read bytes %d from page %d", n, pageNumber)
+	log.Printf("read bytes %d from page %d", n, pageId)
 	if err != nil && err != io.EOF {
-		log.Printf("error when writing to disk page %d", pageNumber)
+		log.Printf("error when writing to disk page %d", pageId)
 		return ErrorReadFromDisk
 	}
 	if err == io.EOF && n < PageSize {
