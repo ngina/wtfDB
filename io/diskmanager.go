@@ -55,7 +55,7 @@ func (d *DefaultDiskManager) Shutdown() {
 
 // WritePage writes the page data of the specified file to the disk file.
 // It takes a page number and a slice of bytes to be written to the page.
-// It returns an error if it cannot write to the page.
+// Returns an error if it cannot write to the page.
 func (d *DefaultDiskManager) WritePage(pageId int, data []byte) error {
 	d.writeCount++
 	offset := pageId * PageSize

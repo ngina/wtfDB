@@ -10,6 +10,7 @@ import (
 
 func Test_write(t *testing.T) {
 	d := setup()
+	defer d.(*DefaultDiskManager).dbFile.Close()
 
 	// create a random slice of bytes
 	l := 1024
