@@ -62,6 +62,8 @@ If the page exists in the metadata store, the current access timestamp is append
 
 This method should be called after a page has been pinned in the buffer pool,
 for the frame/page that is being read from/written to.
+
+Todo: limit the access history size to k
 */
 func (lruK *LruKReplacer) recordAccess(frameId int) {
 	current_timestamp := time.Now().UTC().UnixMilli()

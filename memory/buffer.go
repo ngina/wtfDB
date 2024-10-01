@@ -2,35 +2,48 @@ package memory
 
 import (
 	"fmt"
-	"time"
+	"log"
 	"wtfDB/io"
 )
 
-// BufferPool is a data structure page-sized extenstions called Frames. This data structure
-// provides the high levels of the system the illusion of addressing and
-// modifying pages as though they are disk pages that exist in RAM (in memory).
-//
-// BufferPool manages a set of paged-size extension memory called frames.
-//
-// BufferPool moves pages from the disk into and out of frames into the buffer pool.
-type BufferPool struct {
-	frames         []Frame     // large range of memory created a server time which is abstracted as frames
+/*
+The BufferPoolManager is responsible for moving physical pages of data between disk and memory.
+It manages frames of memory and related metadata. A frame represents in memory a physical page on disk.
+
+Responsibilities:
+* The buffer pool is responsible for moving physical pages of data back and forth from buffers in
+main memory to persistent storage.
+
+* It also behaves as a cache, keeping frequently used pages
+in memory for faster access, and evicting unused or cold pages back out to storage.
+
+* It allows a DBMS to support databases that are larger than the amount of memory available to the system.
+Consider a computer with 1 GB of memory (RAM). If we want to manage a 2 GB database, a buffer pool manager
+gives us the ability to interact with this database without needing to fit its entire contents in memory.
+*/
+type BufferPoolManager struct {
+	frames         []*Frame    // list of frame metadata of the frames that the buffer pool manages
 	pageToFrame    map[int]int // buffer manager hash table on page id to frame id
-	freeFrameIndex int         // index of first free fram
+	nextPageId     int         // the next page id to be allocated -- monotonically increasing counter
+	freeFrames     []int       // list of free frames that do not hold any page data
 	diskManager    io.DiskManager
-	EvictionPolicy
+	LruKReplacer
 }
 
-// Buffer frame contains information about the loaded page,
-// wrapped around the underlying byte array.
+// Buffer frame metadata stores metadata about a frame / page in memory.
+// It contains a pointer/index to the actual frame / page data in the buffer.
+type FrameMetadata struct {
+	id       int       // The frame id/index of the frame in the buffer pool
+	pageId   int       // page id
+	isDirty  bool      // flag to track whether a page has been modified/written
+	refBit   bool      // allows page to be referenced once before it is eligible for eviction
+	pinCount int       // number of tasks/queries that are working with the page in memory
+}
+
+// A buffer frame store metadata and page data.
 type Frame struct {
-	id         int
-	pageNumber int
-	isDirty    bool      // page has been modified/written
-	refBit     bool      // allows page to be referenced once before it is eligible for eviction
-	pinCount   int       // number of tasks/queries that are working with the page in memory
-	contents   []byte    // page contents
-	lastUsed   time.Time // in unix micro (int64)
+	FrameMetadata
+	data []byte // page data
 }
 
 // Pin pins a buffer frame to indicate the page is "in use".
@@ -52,76 +65,133 @@ func (f *Frame) unpin() error {
 	return nil
 }
 
+// Returns the number of frames that this buffer pool manages
+func (m *BufferPoolManager) size() int {
+	return len(m.frames)
+}
+
+// Allocates a new page on disk. A new page is allocated via the nextPageId counter.
+// Returns the page id of the newly allocated page.
+func (m *BufferPoolManager) NewPage() int {
+	newPageId := m.nextPageId
+	m.nextPageId++
+
+	// need to associate page with frame
+	if len(m.freeFrames) > 0 {
+
+	}
+
+	return newPageId
+}
+
+/*
+
+*/
+func (M* BufferPoolManager) DeletePage(pageId int) (bool, error) {
+	return false, nil
+}
+
 // GetPage returns a Page object that represents the page with the given page number
 // in the buffer pool. If the page is not in the buffer pool, it is read from disk
 // and placed in a frame in the buffer pool. The page is pinned in memory until it is
 // unpinned by the requestor(caller), at which point it is eligible for eviction
 // by the buffer pool's eviction policy.
-func (p BufferPool) GetPage(pageNum int) (Page, error) {
-	f := p.getPageFrame(pageNum)
-	return Page{
-		pageId: pageNum,
-		buf:    f.contents,
-	}, nil
+func (m *BufferPoolManager) GetPage(pageId int) (*Frame, error) {
+	return m.getPageFrame(pageId)
 }
 
-func (b BufferPool) WritePage(pageNumber int, contents []byte) error {
+func (m *BufferPoolManager) WritePage(pageId int, contents []byte) error {
 	return nil
 }
 
-// Returns a buffer frame with the specified page. Returns existing buffer frame if
-// the page already exists in the buffer pool, that is, the page has been loaded in memory.
-// Otherwise, it fetches the page from disk and loads it into an available buffer frame.
-// Pins the buffer frame.
-func (p BufferPool) getPageFrame(pageNumber int) Frame {
+/*
+Returns a buffer frame with the specified page. This method also pins the page.
+
+This method handles 3 cases:
+  - Case 1. the page exists in memory, therefore no need for additional i/o
+  - Case 2: the page does not exist in memory and there exists available/free buffer frames in memory,
+    in which case this method assigns the specified page to a free frame
+  - Case 3: the page does not exist in and memory/buffer is full, the buffer therefore has to evict
+    a page in memory, using lru-k to find a candidate frame for eviction, in order to bring
+    in the specified page into a frame.
+*/
+func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 	// case 1: page is loaded in memory
-	if frameIndex, ok := p.pageToFrame[pageNumber]; ok {
-		frame := p.frames[frameIndex]
+	if i, ok := m.pageToFrame[pageId]; ok {
+		frame := m.frames[i]
 		frame.pin()
-		return frame
+		return frame, nil
 	}
 
-	// case 2. page is not in memory, therefore it does not exist in buffer pool
-	// 1.1 send request to disk manager to fetch page from disk
-	// 1.11 fetches page into empty frame
-	// 1.12 fetch page into existing frame: replace an existing page using an eviction policy
-	// 1.121 case 1. handle dirty pages.
-	// -- if frame is dirty write current page to disk, mark frame clean
-	// -- read requested page into frame from disk manager
-	// -- pin page and return pointer to page to the requester
-	// -- requestor sets dirty page if modified
-	// -- requestore unpins page when done modifying
-	// 1.122 case 2. page replacement
-
-	// Get the next free frame before deciding to evict an existing frame
-	var availableFrame Frame
-	if p.freeFrameIndex >= 0 && p.freeFrameIndex < len(p.frames) {
-		availableFrame = p.frames[p.freeFrameIndex]
-	} else {
-		// Evict a buffer frame if the buffer pool is full and there are no free buffer frames
-		evictedFrame, err := p.Evict()
-		if err != nil {
-			return Frame{}
-		}
-		delete(p.pageToFrame, int(evictedFrame.pageNumber))
-		availableFrame = evictedFrame
+	// handles case 2 and 3 when the page is not found in memory
+	// case 2: page is not in memory, and there exists free frame/s
+	if len(m.freeFrames) > 0 {
+		i := m.freeFrames[0]
+		frame := m.frames[i]
+		m.pageToFrame[pageId] = i
+		frame.pageId = pageId
+		m.diskManager.ReadPage(pageId, frame.data)
+		frame.pin()
+		return frame, nil
 	}
 
-	p.flush(availableFrame)
-	availableFrame.pageNumber = pageNumber
-	p.diskManager.ReadPage(pageNumber, availableFrame.contents)
-	availableFrame.pin()
-	return availableFrame
+	// case 3: page is not in memory, and memory/buffer is full
+	i, err := m.evict()
+	if err != nil {
+		log.Printf("cannot find available frame for page id: %d", pageId)
+		return nil, fmt.Errorf("memory is full - retry")
+	}
+	frame := m.frames[i]
+	if !m.FlushPage(frame.pageId) {
+		log.Printf("unable to flush data to disk for page id: %d - retry", frame.pageId)
+		return nil, fmt.Errorf("internal error: memory is full - retry")
+	}
+	delete(m.pageToFrame, frame.pageId) // a frame can only map to a single page
+	frame.FrameMetadata = FrameMetadata{
+		id:     i,
+		pageId: pageId,
+	}
+	m.pageToFrame[pageId] = i
+	frame.pin()
+	m.diskManager.ReadPage(pageId, frame.data) // read new page into frame
+	return frame, nil
+
 }
 
-func (p BufferPool) flush(f Frame) error {
-	if !f.isDirty {
-		return nil
+/*
+Flush page data out to disk.
+
+Writes a page's data out to disk if it has been modified in memory/buffer.
+If the given page is not in memory, this function will return false. If there
+is an error returned by the disk manager, the function will return false.
+Returns true, if the frame/page was not modified or the page was successfully
+written to disk.
+*/
+func (m *BufferPoolManager) FlushPage(pageId int) bool {
+	frameId, ok := m.pageToFrame[pageId]
+	if !ok {
+		log.Printf("page id %d not found in buffer", pageId)
+		return false
 	}
-	err := p.diskManager.WritePage(int(f.pageNumber), f.contents)
+	f := m.frames[frameId]
+	if !f.isDirty {
+		return true
+	}
+	err := m.diskManager.WritePage(int(pageId), f.data)
 	if err != nil {
-		return fmt.Errorf("error writing page number [%d] to disk", f.pageNumber)
+		log.Printf("error flushing page to disk: %d", f.pageId)
+		return false
 	}
 	f.isDirty = false
-	return nil
+	return true
+}
+
+// Flushes all page data that is in memory to disk
+// Fixme: needs to perform some sanity checks
+func (m *BufferPoolManager) FlushAllPages() bool {
+	allFlushed := true
+	for pageId, _ := range m.pageToFrame {
+		allFlushed = allFlushed && m.FlushPage(pageId)
+	}
+	return allFlushed
 }

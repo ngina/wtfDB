@@ -1,10 +1,7 @@
 package memory
 
 import (
-	"container/list"
 	"fmt"
-	"math"
-	"time"
 )
 
 /*
@@ -29,6 +26,10 @@ type ClockEvictionPolicy struct {
 	hand int
 }
 
+func (c *ClockEvictionPolicy) hit(f Frame) {
+	f.pinCount++
+}
+
 // Called when a page needs to be evicted. Returns frame index of
 // page to be evicted. Visits each page, checks if its ref bit is set to 1.
 // If yes, set to zero. If no, then evict.
@@ -49,3 +50,4 @@ func (c *ClockEvictionPolicy) evict(frames []Frame) (int, error) {
 	c.hand = (c.hand + 1) % frameSize
 	return toEvict, nil
 }
+ 
