@@ -22,28 +22,34 @@ Consider a computer with 1 GB of memory (RAM). If we want to manage a 2 GB datab
 gives us the ability to interact with this database without needing to fit its entire contents in memory.
 */
 type BufferPoolManager struct {
-	frames         []*Frame    // list of frame metadata of the frames that the buffer pool manages
-	pageToFrame    map[int]int // buffer manager hash table on page id to frame id
-	nextPageId     int         // the next page id to be allocated -- monotonically increasing counter
-	freeFrames     []int       // list of free frames that do not hold any page data
-	diskManager    io.DiskManager
-	LruKReplacer
+	frames       []*Frame    // list of frame metadata of the frames that the buffer pool manages
+	pageToFrame  map[int]int // buffer manager hash table on page id to frame id
+	nextPageId   int         // the next page id to be allocated -- monotonically increasing counter
+	freeFrames   []int       // list of free frames that do not hold any page data
+	diskManager  io.DiskManager
+	lrukreplacer LruKReplacer
 }
 
 // Buffer frame metadata stores metadata about a frame / page in memory.
 // It contains a pointer/index to the actual frame / page data in the buffer.
 type FrameMetadata struct {
-	id       int       // The frame id/index of the frame in the buffer pool
-	pageId   int       // page id
-	isDirty  bool      // flag to track whether a page has been modified/written
-	refBit   bool      // allows page to be referenced once before it is eligible for eviction
-	pinCount int       // number of tasks/queries that are working with the page in memory
+	Id       int  // The frame id/index of the frame in the buffer pool
+	PageId   int  // page id
+	isDirty  bool // flag to track whether a page has been modified/written
+	refBit   bool // allows page to be referenced once before it is eligible for eviction
+	pinCount int  // number of tasks/queries that are working with the page in memory
 }
 
 // A buffer frame store metadata and page data.
 type Frame struct {
 	FrameMetadata
-	data []byte // page data
+	Data []byte // page data
+}
+
+func NewFrame() *Frame {
+	return &Frame{
+		Data: make([]byte, 0),
+	}
 }
 
 // Pin pins a buffer frame to indicate the page is "in use".
@@ -78,16 +84,31 @@ func (m *BufferPoolManager) NewPage() int {
 
 	// need to associate page with frame
 	if len(m.freeFrames) > 0 {
-
+		i := m.freeFrames[0]
+		m.freeFrames = m.freeFrames[1:]
+		m.pageToFrame[newPageId] = i
+		m.frames[i].PageId = newPageId
+		m.frames[i].pin()
+	} else {
+		// no available frames. evict a frame
+		isEvicted, i := m.evict()
+		if !isEvicted {
+			return -1 // cannot create a new page
+		}
+		m.frames[i].FrameMetadata = FrameMetadata{
+			Id:     i,
+			PageId: newPageId,
+		}
+		m.pageToFrame[newPageId] = i
+		m.frames[i].pin()
+		m.diskManager.ReadPage(newPageId, m.frames[i].Data) // read new page into frame
 	}
-
 	return newPageId
 }
 
 /*
-
-*/
-func (M* BufferPoolManager) DeletePage(pageId int) (bool, error) {
+ */
+func (m *BufferPoolManager) DeletePage(pageId int) (bool, error) {
 	return false, nil
 }
 
@@ -129,33 +150,45 @@ func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 		i := m.freeFrames[0]
 		frame := m.frames[i]
 		m.pageToFrame[pageId] = i
-		frame.pageId = pageId
-		m.diskManager.ReadPage(pageId, frame.data)
+		frame.PageId = pageId
+		m.diskManager.ReadPage(pageId, frame.Data)
 		frame.pin()
 		return frame, nil
 	}
 
 	// case 3: page is not in memory, and memory/buffer is full
-	i, err := m.evict()
-	if err != nil {
-		log.Printf("cannot find available frame for page id: %d", pageId)
-		return nil, fmt.Errorf("memory is full - retry")
-	}
-	frame := m.frames[i]
-	if !m.FlushPage(frame.pageId) {
-		log.Printf("unable to flush data to disk for page id: %d - retry", frame.pageId)
+	evicted, i := m.evict()
+	if !evicted {
 		return nil, fmt.Errorf("internal error: memory is full - retry")
 	}
-	delete(m.pageToFrame, frame.pageId) // a frame can only map to a single page
+	frame := m.frames[i]
 	frame.FrameMetadata = FrameMetadata{
-		id:     i,
-		pageId: pageId,
+		Id:     i,
+		PageId: pageId,
 	}
 	m.pageToFrame[pageId] = i
 	frame.pin()
-	m.diskManager.ReadPage(pageId, frame.data) // read new page into frame
+	m.diskManager.ReadPage(pageId, frame.Data) // read new page into frame
 	return frame, nil
 
+}
+
+// Returns true if a page was successfully evicted from the buffer pool. If true,
+// the index of the evicted/free buffer frame is returned, otherwise -1.
+func (m *BufferPoolManager) evict() (bool, int) {
+	i, err := m.lrukreplacer.evict() // get candidate pool to evict
+	if err != nil {
+		log.Println("cannot perform eviction")
+		log.Println("memory is full - retry")
+		return false, -1
+	}
+	frame := m.frames[i]
+	if !m.FlushPage(frame.PageId) {
+		log.Printf("unable to flush data to disk for page id: %d - retry", frame.PageId)
+		return false, -1
+	}
+	delete(m.pageToFrame, frame.PageId) // a frame can only map to a single page
+	return true, i
 }
 
 /*
@@ -177,9 +210,9 @@ func (m *BufferPoolManager) FlushPage(pageId int) bool {
 	if !f.isDirty {
 		return true
 	}
-	err := m.diskManager.WritePage(int(pageId), f.data)
+	err := m.diskManager.WritePage(int(pageId), f.Data)
 	if err != nil {
-		log.Printf("error flushing page to disk: %d", f.pageId)
+		log.Printf("error flushing page to disk: %d", f.PageId)
 		return false
 	}
 	f.isDirty = false
