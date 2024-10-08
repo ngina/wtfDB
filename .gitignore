@@ -1,1 +1,4 @@
 db_files/*
+memory/bufreader*
+memory/bufferedreader*
+wtfDB
