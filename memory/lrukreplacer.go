@@ -25,7 +25,7 @@ type LruKFrameAccessMetadata struct {
 }
 
 type LruKReplacer struct {
-	k             int
+	k             int                             // access history list
 	maxSize       int                             // the maximum number of frames lruK can track/store
 	size          int                             // tracks the number of evictable frames
 	metadataStore map[int]LruKFrameAccessMetadata // map of frame id to lru-k frame metadata
@@ -33,6 +33,15 @@ type LruKReplacer struct {
 }
 
 var ErrorAllFramesArePinned = fmt.Errorf("cannot evict anything -- everything is pinned")
+
+func NewLruKReplacer() *LruKReplacer {
+	return &LruKReplacer{
+		k:             3,
+		maxSize:       10,
+		metadataStore: make(map[int]LruKFrameAccessMetadata),
+		lru:           list.New(),
+	}
+}
 
 /*
 Evict the frame that has the largest backward k-distance compared

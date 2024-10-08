@@ -3,6 +3,7 @@ package memory
 import (
 	"fmt"
 	"log"
+	"slices"
 	"wtfDB/io"
 )
 
@@ -26,8 +27,9 @@ type BufferPoolManager struct {
 	pageToFrame  map[int]int // buffer manager hash table on page id to frame id
 	nextPageId   int         // the next page id to be allocated -- monotonically increasing counter
 	freeFrames   []int       // list of free frames that do not hold any page data
+	size         int         // the number of frames the buffer pool manages
 	diskManager  io.DiskManager
-	lrukreplacer LruKReplacer
+	lrukreplacer *LruKReplacer
 }
 
 // Buffer frame metadata stores metadata about a frame / page in memory.
@@ -35,7 +37,7 @@ type BufferPoolManager struct {
 type FrameMetadata struct {
 	Id       int  // The frame id/index of the frame in the buffer pool
 	PageId   int  // page id
-	isDirty  bool // flag to track whether a page has been modified/written
+	IsDirty  bool // flag to track whether a page has been modified/written
 	refBit   bool // allows page to be referenced once before it is eligible for eviction
 	pinCount int  // number of tasks/queries that are working with the page in memory
 }
@@ -46,9 +48,15 @@ type Frame struct {
 	Data []byte // page data
 }
 
-func NewFrame() *Frame {
+const InvalidPageId = int(-1)
+
+func newFrame(i int) *Frame {
 	return &Frame{
-		Data: make([]byte, 0),
+		FrameMetadata: FrameMetadata{
+			Id:     i,
+			PageId: InvalidPageId,
+		},
+		Data: make([]byte, io.PageSize), // buffer frame size determined by page size
 	}
 }
 
@@ -71,37 +79,53 @@ func (f *Frame) unpin() error {
 	return nil
 }
 
-// Returns the number of frames that this buffer pool manages
-func (m *BufferPoolManager) size() int {
-	return len(m.frames)
+func NewBufferPoolManager(dsm io.DiskManager, size int) *BufferPoolManager {
+	freeFrames := make([]int, size)
+	frames := make([]*Frame, size)
+	for i := range size {
+		freeFrames[i] = i
+		frames[i] = newFrame(i)
+	}
+	return &BufferPoolManager{
+		frames:       frames,
+		freeFrames:   freeFrames, // todo: maybe should be a queue ??/
+		pageToFrame:  make(map[int]int),
+		diskManager:  dsm,
+		lrukreplacer: NewLruKReplacer(),
+		size:         size,
+	}
 }
 
-// Allocates a new page on disk. A new page is allocated via the nextPageId counter.
-// Returns the page id of the newly allocated page.
-func (m *BufferPoolManager) NewPage() int {
+func (m *BufferPoolManager) GetNewPageFrame() (*Frame, error) {
+	return m.GetPage(m.newPage())
+}
+
+// Creates a new page that is loaded onto a buffer frame.
+// A new page is allocated via the nextPageId counter.
+// Returns the page id of the newly created page or an InvalidPageId if unable to create a new page.
+func (m *BufferPoolManager) newPage() int {
 	newPageId := m.nextPageId
 	m.nextPageId++
 
-	// need to associate page with frame
+	// need to persist new page to a buffer frame
 	if len(m.freeFrames) > 0 {
-		i := m.freeFrames[0]
-		m.freeFrames = m.freeFrames[1:]
-		m.pageToFrame[newPageId] = i
-		m.frames[i].PageId = newPageId
-		m.frames[i].pin()
+		frameIdx := m.freeFrames[0]
+		m.freeFrames = slices.Delete(m.freeFrames, 0, 1) // todo: maybe use a queue/stack ?
+		m.pageToFrame[newPageId] = frameIdx
+		m.frames[frameIdx].PageId = newPageId
+		// m.frames[frameIdx].pin()
 	} else {
 		// no available frames. evict a frame
 		isEvicted, i := m.evict()
 		if !isEvicted {
-			return -1 // cannot create a new page
+			return InvalidPageId // cannot create a new page
 		}
 		m.frames[i].FrameMetadata = FrameMetadata{
 			Id:     i,
 			PageId: newPageId,
 		}
 		m.pageToFrame[newPageId] = i
-		m.frames[i].pin()
-		m.diskManager.ReadPage(newPageId, m.frames[i].Data) // read new page into frame
+		// m.frames[i].pin()
 	}
 	return newPageId
 }
@@ -118,7 +142,12 @@ func (m *BufferPoolManager) DeletePage(pageId int) (bool, error) {
 // unpinned by the requestor(caller), at which point it is eligible for eviction
 // by the buffer pool's eviction policy.
 func (m *BufferPoolManager) GetPage(pageId int) (*Frame, error) {
-	return m.getPageFrame(pageId)
+	f, err := m.getPageFrame(pageId)
+	if err != nil {
+		return nil, err
+	}
+	f.pin()
+	return f, nil
 }
 
 func (m *BufferPoolManager) WritePage(pageId int, contents []byte) error {
@@ -140,7 +169,7 @@ func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 	// case 1: page is loaded in memory
 	if i, ok := m.pageToFrame[pageId]; ok {
 		frame := m.frames[i]
-		frame.pin()
+		// frame.pin()
 		return frame, nil
 	}
 
@@ -152,7 +181,7 @@ func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 		m.pageToFrame[pageId] = i
 		frame.PageId = pageId
 		m.diskManager.ReadPage(pageId, frame.Data)
-		frame.pin()
+		// frame.pin()
 		return frame, nil
 	}
 
@@ -167,10 +196,9 @@ func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 		PageId: pageId,
 	}
 	m.pageToFrame[pageId] = i
-	frame.pin()
+	// frame.pin()
 	m.diskManager.ReadPage(pageId, frame.Data) // read new page into frame
 	return frame, nil
-
 }
 
 // Returns true if a page was successfully evicted from the buffer pool. If true,
@@ -207,7 +235,7 @@ func (m *BufferPoolManager) FlushPage(pageId int) bool {
 		return false
 	}
 	f := m.frames[frameId]
-	if !f.isDirty {
+	if !f.IsDirty {
 		return true
 	}
 	err := m.diskManager.WritePage(int(pageId), f.Data)
@@ -215,7 +243,7 @@ func (m *BufferPoolManager) FlushPage(pageId int) bool {
 		log.Printf("error flushing page to disk: %d", f.PageId)
 		return false
 	}
-	f.isDirty = false
+	f.IsDirty = false
 	return true
 }
 

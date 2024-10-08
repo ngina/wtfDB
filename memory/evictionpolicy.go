@@ -46,7 +46,7 @@ func (c *ClockEvictionPolicy) evict(frames []Frame) (int, error) {
 	if iterations == 2*frameSize {
 		return 0, fmt.Errorf("cannot perform eviction. all frames are pinned")
 	}
-	toEvict := frames[c.hand].id
+	toEvict := frames[c.hand].Id
 	c.hand = (c.hand + 1) % frameSize
 	return toEvict, nil
 }
