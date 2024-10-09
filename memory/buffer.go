@@ -62,16 +62,16 @@ func newFrame(i int) *Frame {
 
 // Pin pins a buffer frame to indicate the page is "in use".
 // A frame's page cannot be evicted while pinned.
-func (f *Frame) isPinned() bool {
+func (f *Frame) IsPinned() bool {
 	return f.pinCount > 0
 }
 
-func (f *Frame) pin() {
+func (f *Frame) Pin() {
 	f.pinCount++
 }
 
 // Unpin buffer frame.
-func (f *Frame) unpin() error {
+func (f *Frame) Unpin() error {
 	if f.pinCount == 0 {
 		return fmt.Errorf("frame is unpinned")
 	}
@@ -146,7 +146,7 @@ func (m *BufferPoolManager) GetPage(pageId int) (*Frame, error) {
 	if err != nil {
 		return nil, err
 	}
-	f.pin()
+	f.Pin()
 	return f, nil
 }
 

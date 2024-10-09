@@ -53,51 +53,39 @@ The layout of a leaf page is as follows:
 // All sizes are in bytes
 const (
 	LeafPageHeaderSize = 16
-	KeyTypeSize        = 64 // Todo: get dynamically
-	RecordIdSize       = 64
-	LeafPageSlotCount  = io.PageSize - LeafPageHeaderSize/(KeyTypeSize+RecordIdSize)
+	LeafPageSlotCount  = io.PageSize - LeafPageHeaderSize/(KeySize+ValueTypeSize)
 )
 
 var ErrBufferFrameTooSmall = fmt.Errorf("buffer frame size cannot be less leaf page header size")
 var LeafNode leafNode
 
 type leafNode struct {
-	bPlusTreeNode
-	keys         []int
-	recordIds    []int         // TODO: update to RecordId type
-	rightSibling int           // page number of the leaf's right sibling
-	frame        *memory.Frame // page on which this node is serialized on
-	parent       *innerNode    //
-}
-
-func basicLeafNode(m *memory.BufferPoolManager) *leafNode {
-	return &leafNode{
-		bPlusTreeNode: bPlusTreeNode{
-			pageType:      1,
-			bufferManager: m,
-		},
-	}
+	treeMetadata  *BPlusTreeMetadata
+	bufferManager *memory.BufferPoolManager
+	keys          []int
+	recordIds     []int         // TODO: update to RecordId type
+	rightSibling  int           // page number of the leaf's right sibling
+	frame         *memory.Frame // page on which this node is serialized on
+	parent        *innerNode    //
 }
 
 /*
 Returns a pointer to a new leaf node
 This method persists the new leaf node to a buffer frame.
 */
-func newLeafNode(m *memory.BufferPoolManager) *leafNode {
+func newLeafNode(m *memory.BufferPoolManager, metadata *BPlusTreeMetadata) *leafNode {
 	f, err := m.GetNewPageFrame()
 	if err != nil {
 		log.Printf("unable to get a new page frame: %+v", err)
 		return nil
 	}
 	return &leafNode{
-		bPlusTreeNode: bPlusTreeNode{
-			pageType:      1,
-			bufferManager: m,
-		},
-		keys:         make([]int, 0),
-		recordIds:    make([]int, 0),
-		rightSibling: memory.InvalidPageId,
-		frame:        f,
+		treeMetadata:  metadata,
+		bufferManager: m,
+		keys:          make([]int, 0),
+		recordIds:     make([]int, 0),
+		rightSibling:  memory.InvalidPageId,
+		frame:         f,
 	}
 }
 
@@ -126,17 +114,17 @@ There are two cases to consider:
 in splitting n into a left and right node. The right node is the newly created right node, whose split
 key is copied into the parent inner ndoe.
 */
-func (l *leafNode) insert(k int, recordId int) bool {
+func (l *leafNode) insert(k int, rid int) bool {
 	// leaf node is nil
 	if l == nil {
 		return false
 	}
 
-	fmt.Printf("Leafnode: inserting k,v pair: %d, %d\n", k, recordId)
+	fmt.Printf("Leafnode: inserting k,v pair: %d, %d\n", k, rid)
 	// case 1. l has enough space
 	if l.getMaxSize()-l.getSize() >= 1 {
 		fmt.Println("Leafnode: leaf node is not full, inserting...")
-		l.insertSort(k, recordId)
+		l.insertSort(k, rid)
 		fmt.Printf("Leafnode: updated leafnode: %+v\n\n", l)
 		return true
 	}
@@ -151,11 +139,11 @@ func (l *leafNode) insert(k int, recordId int) bool {
 	// append the new k to current list of keys
 	// copy half of the keys into the new node
 	fmt.Println("Leafnode: leaf node is full, inserting k,v pair...")
-	newL := newLeafNode(l.bufferManager)
+	newL := newLeafNode(l.bufferManager, l.treeMetadata)
 	if newL == nil {
 		return false
 	}
-	l.insertSort(k, recordId)
+	l.insertSort(k, rid)
 
 	// copy half of the keys/record ids into the new leaf node
 	mid := len(l.keys) / 2
@@ -237,12 +225,12 @@ func (l *leafNode) toBytes(buf []byte) error {
 
 	for i := range l.keys {
 		// todo: dynamically set key size based on key type
-		binary.BigEndian.PutUint64(buf[LeafPageHeaderSize+KeySize*i:], uint64(l.keys[i]))
+		binary.BigEndian.PutUint64(buf[LeafPageHeaderSize+(KeySize*i):], uint64(l.keys[i]))
 	}
 
 	ridOffset := LeafPageHeaderSize + len(l.keys)*KeySize
 	for i := range l.recordIds {
-		binary.BigEndian.PutUint64(buf[ridOffset+RecordIdSize*i:], uint64(l.recordIds[i]))
+		binary.BigEndian.PutUint64(buf[ridOffset+(ValueTypeSize*i):], uint64(l.recordIds[i]))
 	}
 	return nil
 }
@@ -264,7 +252,7 @@ func (l *leafNode) fromBytes(data []byte) (BPlusTreeNode, error) {
 	}
 
 	currentSize := binary.BigEndian.Uint32(data[4:8])
-	maxSize := binary.BigEndian.Uint32(data[8:12])
+	// maxSize := binary.BigEndian.Uint32(data[8:12])
 	rightSibling := binary.BigEndian.Uint32(data[12:16])
 	// todo: dynamically determine key type
 	keys, recordIds := []int{}, []int{}
@@ -275,21 +263,17 @@ func (l *leafNode) fromBytes(data []byte) (BPlusTreeNode, error) {
 	}
 
 	count := 0
-	for i := ridOffset; count < int(currentSize)/2; i = i + RecordIdSize {
-		r := binary.BigEndian.Uint64(data[i : i+RecordIdSize])
+	for i := ridOffset; count < int(currentSize)/2; i = i + ValueTypeSize {
+		r := binary.BigEndian.Uint64(data[i : i+ValueTypeSize])
 		recordIds = append(recordIds, int(r))
 		count++
 	}
 
 	return &leafNode{
-		bPlusTreeNode: bPlusTreeNode{
-			bufferManager: l.bufferManager,
-			pageType:      1,
-			maxSize:       int(maxSize),
-			size:          int(currentSize),
-		},
-		rightSibling: int(rightSibling),
-		keys:         keys,
-		recordIds:    recordIds,
+		bufferManager: l.bufferManager,
+		treeMetadata:  l.treeMetadata,
+		rightSibling:  int(rightSibling),
+		keys:          keys,
+		recordIds:     recordIds,
 	}, nil
 }

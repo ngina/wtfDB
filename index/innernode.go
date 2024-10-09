@@ -3,11 +3,11 @@ package index
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
 	"slices"
 	"wtfDB/io"
 	"wtfDB/memory"
-	"log"
 )
 
 /*
@@ -48,39 +48,29 @@ A inner node includes:
 
 // All sizes are in bytes
 const InternalPageHeaderSize = 12
-const InternalPageSlotCount = io.PageSize - InternalPageHeaderSize/(KeySize+ValueType)
+const InternalPageSlotCount = io.PageSize - InternalPageHeaderSize/(KeySize+ValueTypeSize)
 const NonExistentSiblingLink = math.MaxInt
 
 // For use with methods that do not need a non-nil pointer/value receiver
 var InnerNode innerNode
 
 type innerNode struct {
-	bPlusTreeNode
-	keys         []int
-	children     []uint64
-	rightSibling int
-	frame        *memory.Frame // page on which this node is serialized on
-	parent       *innerNode
+	treeMetadata  *BPlusTreeMetadata
+	bufferManager *memory.BufferPoolManager
+	keys          []int
+	children      []uint64
+	rightSibling  int
+	frame         *memory.Frame // page on which this node is serialized on
+	parent        *innerNode
 }
 
-func basicInnerNode(m *memory.BufferPoolManager) *innerNode {
+func newInnerNode(b *memory.BufferPoolManager, m *BPlusTreeMetadata) *innerNode {
 	return &innerNode{
-		bPlusTreeNode: bPlusTreeNode{
-			pageType:      0,
-			bufferManager: m,
-		},
-	}
-}
-
-func newInnerNode(m *memory.BufferPoolManager) *innerNode {
-	return &innerNode{
-		bPlusTreeNode: bPlusTreeNode{
-			pageType:      0,
-			bufferManager: m,
-		},
-		keys:     []int{math.MaxInt},
-		children: make([]uint64, 0),
-		rightSibling: memory.InvalidPageId,
+		treeMetadata:  m,
+		bufferManager: b,
+		keys:          []int{math.MaxInt},
+		children:      make([]uint64, 0),
+		rightSibling:  memory.InvalidPageId,
 	}
 }
 
@@ -116,6 +106,11 @@ func (n *innerNode) get(key int) (int, bool) {
 // Returns true, if key/child pointer insertion was successful. Otherwise false,
 // if insertion failed.
 func (n *innerNode) insert(key int, pageId int) bool {
+	// case 0. internal node is nil
+	if n == nil {
+		log.Println(ErrNilNode.Error())
+		return false
+	}
 	// case 1. internal node is not full
 	if n.getMaxSize()-n.getSize() >= 1 {
 		n.sInsert(key, uint64(pageId))
@@ -125,11 +120,11 @@ func (n *innerNode) insert(key int, pageId int) bool {
 
 	// case 2. internal node is full
 	// to split inner node, redistribute keys evenly, but push up middle key
-	newPageFrame, err := n.bPlusTreeNode.bufferManager.GetNewPageFrame()
+	newPageFrame, err := n.bufferManager.GetNewPageFrame()
 	if err != nil {
 		return false
 	}
-	newNode := newInnerNode(n.bufferManager)
+	newNode := newInnerNode(n.bufferManager, n.treeMetadata)
 	newNode.frame = newPageFrame
 
 	// create new right node and redistribute keys
@@ -209,13 +204,10 @@ func (n *innerNode) fromBytes(data []byte) (BPlusTreeNode, error) {
 	}
 
 	return &innerNode{
-		keys:         keys,
-		children:     pagePointers,
-		rightSibling: int(rightSibling),
-		bPlusTreeNode: bPlusTreeNode{
-			pageType: 0,
-			size:     int(keyCount * 2),
-			bufferManager: n.bufferManager,
-		},
+		keys:          keys,
+		children:      pagePointers,
+		rightSibling:  int(rightSibling),
+		bufferManager: n.bufferManager,
+		treeMetadata:  n.treeMetadata,
 	}, nil
 }

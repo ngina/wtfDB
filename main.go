@@ -19,7 +19,7 @@ func main() {
 		panic(err)
 	}
 	// Insert 5 keys to test leaf node split
-	for i := range 5 {
+	for i := 1; i <= 5; i++ {
 		t.Insert(i, 100+i)
 	}
 	bptree = t

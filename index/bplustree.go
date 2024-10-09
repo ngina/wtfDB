@@ -47,23 +47,25 @@ func NewBPlusTreeMetadata(indexName string) *BPlusTreeMetadata {
 	}
 }
 
-func NewBPlusTree(indexName string, bufferManager *memory.BufferPoolManager, treeMetadata *BPlusTreeMetadata) (*bPlusTree, error) {
-	t := &bPlusTree{
-		metadata: treeMetadata,
-		bpm:      bufferManager,
+func NewBPlusTree(indexName string, b *memory.BufferPoolManager, m *BPlusTreeMetadata) (*bPlusTree, error) {
+	bptree := &bPlusTree{
+		metadata: m,
+		bpm:      b,
 	}
 	// case 1. there exists a valid root page id
-	if treeMetadata.rootPageId != memory.InvalidPageId {
-		n, err := bPlusTreeNode{}.fromBytes(t.bpm, t.metadata.rootPageId)
+	if m.rootPageId != memory.InvalidPageId {
+		n, err := fromBytes(b, m)
 		if err != nil {
 			return nil, err
 		}
-		t.root = n
+		bptree.root = n
 	} else {
 		// case 2: we need to create the root page
-		t.root = newLeafNode(t.bpm)
+		leaf := newLeafNode(b, m)
+		bptree.root = leaf
+		bptree.metadata.rootPageId = leaf.frame.PageId 
 	}
-	return t, nil
+	return bptree, nil
 }
 
 // Inserts a k,v pair into the B+tree

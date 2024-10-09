@@ -37,7 +37,7 @@ func (c *ClockEvictionPolicy) evict(frames []Frame) (int, error) {
 	frameSize := len(frames)
 	var iterations int
 	for iterations = 0; iterations < 2*frameSize &&
-		((frames[c.hand].refBit == true) || frames[c.hand].isPinned()); iterations++ {
+		((frames[c.hand].refBit == true) || frames[c.hand].IsPinned()); iterations++ {
 
 		frames[c.hand].refBit = false
 		c.hand = (c.hand + 1) % frameSize
