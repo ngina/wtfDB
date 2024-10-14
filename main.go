@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"wtfDB/index"
 	"wtfDB/io"
 	"wtfDB/memory"
@@ -18,9 +19,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	// Insert 5 keys to test leaf node split
-	for i := 1; i <= 5; i++ {
-		t.Insert(i, 100+i)
+
+	// Test inserting and splitting of nodes
+	for i := 1; i <= 8; i++ {
+		t.Insert(100+i, rand.Intn(59))
 	}
 	bptree = t
 }

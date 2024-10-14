@@ -79,6 +79,12 @@ func (f *Frame) Unpin() error {
 	return nil
 }
 
+func (f *Frame) ZeroBuffer() {
+	for i := range f.Data {
+		f.Data[i] = 0
+	}
+}
+
 func NewBufferPoolManager(dsm io.DiskManager, size int) *BufferPoolManager {
 	freeFrames := make([]int, size)
 	frames := make([]*Frame, size)
@@ -158,10 +164,10 @@ func (m *BufferPoolManager) WritePage(pageId int, contents []byte) error {
 Returns a buffer frame with the specified page. This method also pins the page.
 
 This method handles 3 cases:
-  - Case 1. the page exists in memory, therefore no need for additional i/o
+  - Case 1. the page exists in memory, therefore no need for additional i/o to fetch page
   - Case 2: the page does not exist in memory and there exists available/free buffer frames in memory,
-    in which case this method assigns the specified page to a free frame
-  - Case 3: the page does not exist in and memory/buffer is full, the buffer therefore has to evict
+    in which case this method assigns the specified page to a free buffer frame
+  - Case 3: the page does not exist in and memory/buffer is full, the buffer manager therefore has to evict
     a page in memory, using lru-k to find a candidate frame for eviction, in order to bring
     in the specified page into a frame.
 */
@@ -169,7 +175,6 @@ func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 	// case 1: page is loaded in memory
 	if i, ok := m.pageToFrame[pageId]; ok {
 		frame := m.frames[i]
-		// frame.pin()
 		return frame, nil
 	}
 
@@ -181,7 +186,6 @@ func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 		m.pageToFrame[pageId] = i
 		frame.PageId = pageId
 		m.diskManager.ReadPage(pageId, frame.Data)
-		// frame.pin()
 		return frame, nil
 	}
 
@@ -196,7 +200,6 @@ func (m *BufferPoolManager) getPageFrame(pageId int) (*Frame, error) {
 		PageId: pageId,
 	}
 	m.pageToFrame[pageId] = i
-	// frame.pin()
 	m.diskManager.ReadPage(pageId, frame.Data) // read new page into frame
 	return frame, nil
 }

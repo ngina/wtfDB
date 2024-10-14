@@ -10,12 +10,14 @@ import (
 const (
 	// MaxPageSize is the max data page size of the db is 4K bytes,
 	// which is the typical OS page size.
-	PageSize = 4 * 1024
+	PageSize = 256 // bytes todo: update to 4K
 )
 
-var ErrorReadFromDisk = fmt.Errorf("error reading from disk")
-var ErrorWriteToDisk = fmt.Errorf("error writing to disk")
-var ErrorFlushToDisk = fmt.Errorf("page contents not flushed to disk")
+var (
+	ErrorReadFromDisk = fmt.Errorf("error reading from disk")
+	ErrorWriteToDisk  = fmt.Errorf("error writing to disk")
+	ErrorFlushToDisk  = fmt.Errorf("page contents not flushed to disk")
+)
 
 /*
 DiskManager is responsible for allocating and deallocating pages on disk.
@@ -29,7 +31,7 @@ type DiskManager interface {
 }
 
 type DefaultDiskManager struct {
-	dbFile    *os.File
+	dbFile     *os.File
 	writeCount int
 }
 

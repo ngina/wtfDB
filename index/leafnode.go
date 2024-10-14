@@ -57,6 +57,7 @@ const (
 )
 
 var ErrBufferFrameTooSmall = fmt.Errorf("buffer frame size cannot be less leaf page header size")
+
 var LeafNode leafNode
 
 type leafNode struct {
@@ -66,12 +67,11 @@ type leafNode struct {
 	recordIds     []int         // TODO: update to RecordId type
 	rightSibling  int           // page number of the leaf's right sibling
 	frame         *memory.Frame // page on which this node is serialized on
-	parent        *innerNode    //
 }
 
 /*
-Returns a pointer to a new leaf node
-This method persists the new leaf node to a buffer frame.
+Returns a pointer to a new leaf node which is associated with a newly created
+page within the buffer frame. The page is pinned.
 */
 func newLeafNode(m *memory.BufferPoolManager, metadata *BPlusTreeMetadata) *leafNode {
 	f, err := m.GetNewPageFrame()
@@ -89,6 +89,23 @@ func newLeafNode(m *memory.BufferPoolManager, metadata *BPlusTreeMetadata) *leaf
 	}
 }
 
+func newLeafNodeFromPage(m *memory.BufferPoolManager, metadata *BPlusTreeMetadata, f *memory.Frame) *leafNode {
+	leaf := &leafNode{
+		treeMetadata:  metadata,
+		bufferManager: m,
+		// keys:          []int{math.MinInt},
+		// children:      make([]uint64, 0),
+		rightSibling: memory.InvalidPageId,
+		frame:        f,
+	}
+	_, _ = leaf.fromBytes(f.Data) // modifies new inner node
+	return leaf
+}
+
+func (l *leafNode) isLeaf() bool {
+	return true
+}
+
 // Get the number of key/value pairs stored in the leaf
 func (l *leafNode) getSize() int {
 	return len(l.keys) + len(l.recordIds)
@@ -99,6 +116,23 @@ func (l *leafNode) getSize() int {
 func (l *leafNode) getMaxSize() int {
 	// return LeafPageSlotCount
 	return 4 * 2
+}
+
+func (l *leafNode) getPageId() int {
+	return l.frame.PageId
+}
+
+// Returns a pointer to the inner parent node and nil when the node does not have a parent
+// This method also removes the parent from the ancestor seen list (constructed durind downwards tree traversal)
+func (l *leafNode) getParent() *innerNode {
+	return l.treeMetadata.removeAncestor()
+}
+
+func (l *leafNode) getSeparatorKey() (int, bool) {
+	if len(l.keys) < 1 {
+		return InvalidKey, false
+	}
+	return l.keys[0], true
 }
 
 /*
@@ -125,6 +159,7 @@ func (l *leafNode) insert(k int, rid int) bool {
 	if l.getMaxSize()-l.getSize() >= 1 {
 		fmt.Println("Leafnode: leaf node is not full, inserting...")
 		l.insertSort(k, rid)
+		l.toBytes()
 		fmt.Printf("Leafnode: updated leafnode: %+v\n\n", l)
 		return true
 	}
@@ -150,7 +185,7 @@ func (l *leafNode) insert(k int, rid int) bool {
 	fmt.Printf("Leaf node: split key: %d\n", mid)
 	newL.keys = l.keys[mid:]
 	newL.recordIds = l.recordIds[mid:]
-	newL.toBytes(newL.frame.Data)
+	newL.toBytes()
 	newL.frame.FrameMetadata.IsDirty = true
 	fmt.Printf("Leafnode: new leafnode: %+v\n\n", newL)
 	fmt.Printf("Leafnode: new leafnode frame: %+v\n\n", *newL.frame)
@@ -159,14 +194,14 @@ func (l *leafNode) insert(k int, rid int) bool {
 	l.keys = l.keys[:mid]
 	l.recordIds = l.recordIds[:mid]
 	l.rightSibling = newL.frame.PageId
-	l.toBytes(l.frame.Data)
+	l.toBytes()
 	l.frame.FrameMetadata.IsDirty = true
 	fmt.Printf("Leafnode: existing leafnode: %+v\n\n", l)
 	fmt.Printf("Leafnode: existing leafnode frame: %+v\n\n", *l.frame)
 	fmt.Printf("After split: buffer manager: %+v\n", *l.bufferManager)
 
 	// copy new split key into parent inner node
-	// l.parent.insert(newL.keys[0], newL.frame.PageId)
+	l.getParent().insert(newL.keys[0], newL.frame.PageId)
 	return true
 }
 
@@ -180,17 +215,26 @@ func (l *leafNode) insertSort(k int, rid int) {
 	l.recordIds = slices.Insert(l.recordIds, pos, rid)
 }
 
-// Return the value associated with a given key.
-// For a leaf node, returns the record id associated with the key
+// Return the value associated with a given key, otherwise -1.
+// Also returns true of if the key exists in the leaf node.
+// For a leaf node, returns the record id associated with the key.
 func (l *leafNode) get(key int) (int, bool) {
-	idx, ok := slices.BinarySearch(l.keys, key)
+	pos, ok := slices.BinarySearch(l.keys, key)
 	if !ok {
 		return -1, false
 	}
 	// todo: decode 64-bit record id
-	rid := l.recordIds[idx] // encoded as a 64-bit unsigned integer
+	v := l.recordIds[pos] // encoded as a 64-bit unsigned integer
 	// &v = &RecordId{}
-	return rid, true
+	return v, true
+}
+
+func (l *leafNode) search(k int) (*leafNode, bool) {
+	_, ok := slices.BinarySearch(l.keys, k)
+	if ok {
+		return l, true
+	}
+	return l, false
 }
 
 /*
@@ -206,31 +250,33 @@ We serialize a leaf node into a page as follows:
  5. list of keys
  6. list of record ids
 */
-func (l *leafNode) toBytes(buf []byte) error {
+func (l *leafNode) toBytes() error {
 	if l == nil {
 		log.Println("cannot convert nil pointer")
 		return ErrNilNode
 	}
-	if len(buf) < LeafPageHeaderSize {
+	if len(l.frame.Data) < LeafPageHeaderSize {
 		return ErrBufferFrameTooSmall
 	}
 	if len(l.keys) != len(l.recordIds) {
 		return fmt.Errorf("number of keys and record ids have to be equal")
 	}
+	// clear buffer contents before write
+	l.frame.ZeroBuffer()
 
-	binary.BigEndian.PutUint32(buf[0:], uint32(1))
-	binary.BigEndian.PutUint32(buf[4:], uint32(l.getSize()))
-	binary.BigEndian.PutUint32(buf[8:], uint32(l.getMaxSize()))
-	binary.BigEndian.PutUint32(buf[12:], uint32(l.rightSibling))
+	binary.BigEndian.PutUint32(l.frame.Data[0:], uint32(1))
+	binary.BigEndian.PutUint32(l.frame.Data[4:], uint32(l.getSize()))
+	binary.BigEndian.PutUint32(l.frame.Data[8:], uint32(l.getMaxSize()))
+	binary.BigEndian.PutUint32(l.frame.Data[12:], uint32(l.rightSibling))
 
 	for i := range l.keys {
 		// todo: dynamically set key size based on key type
-		binary.BigEndian.PutUint64(buf[LeafPageHeaderSize+(KeySize*i):], uint64(l.keys[i]))
+		binary.BigEndian.PutUint64(l.frame.Data[LeafPageHeaderSize+(KeySize*i):], uint64(l.keys[i]))
 	}
 
 	ridOffset := LeafPageHeaderSize + len(l.keys)*KeySize
 	for i := range l.recordIds {
-		binary.BigEndian.PutUint64(buf[ridOffset+(ValueTypeSize*i):], uint64(l.recordIds[i]))
+		binary.BigEndian.PutUint64(l.frame.Data[ridOffset+(ValueTypeSize*i):], uint64(l.recordIds[i]))
 	}
 	return nil
 }
@@ -241,7 +287,6 @@ This method translates a leaf page encoded as a byte sequence into a
 leaf node (Go data structures).
 */
 func (l *leafNode) fromBytes(data []byte) (BPlusTreeNode, error) {
-	fmt.Printf("provided data %#v", data)
 	if len(data) < LeafPageHeaderSize {
 		return nil, fmt.Errorf("leaf page has less than the fixed-size page header")
 	}
@@ -268,12 +313,8 @@ func (l *leafNode) fromBytes(data []byte) (BPlusTreeNode, error) {
 		recordIds = append(recordIds, int(r))
 		count++
 	}
-
-	return &leafNode{
-		bufferManager: l.bufferManager,
-		treeMetadata:  l.treeMetadata,
-		rightSibling:  int(rightSibling),
-		keys:          keys,
-		recordIds:     recordIds,
-	}, nil
+	l.keys = keys
+	l.recordIds = recordIds
+	l.rightSibling = int(rightSibling)
+	return l, nil
 }
