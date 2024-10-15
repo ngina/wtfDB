@@ -89,10 +89,11 @@ func newLeafNode(m *memory.BufferPoolManager, metadata *BPlusTreeMetadata) *leaf
 	}
 }
 
-func newLeafNodeFromPage(m *memory.BufferPoolManager, metadata *BPlusTreeMetadata, f *memory.Frame) *leafNode {
+// Constructs a leafNode object using the page's data.
+func createLeafNodeFromPage(b *memory.BufferPoolManager, m *BPlusTreeMetadata, f *memory.Frame) *leafNode {
 	leaf := &leafNode{
-		treeMetadata:  metadata,
-		bufferManager: m,
+		bufferManager: b,
+		treeMetadata: m,
 		// keys:          []int{math.MinInt},
 		// children:      make([]uint64, 0),
 		rightSibling: memory.InvalidPageId,
@@ -270,10 +271,8 @@ func (l *leafNode) toBytes() error {
 	binary.BigEndian.PutUint32(l.frame.Data[12:], uint32(l.rightSibling))
 
 	for i := range l.keys {
-		// todo: dynamically set key size based on key type
-		binary.BigEndian.PutUint64(l.frame.Data[LeafPageHeaderSize+(KeySize*i):], uint64(l.keys[i]))
+		binary.BigEndian.PutUint64(l.frame.Data[LeafPageHeaderSize+(KeySize*i):], uint64(l.keys[i])) // todo: dynamically set key size based on key type
 	}
-
 	ridOffset := LeafPageHeaderSize + len(l.keys)*KeySize
 	for i := range l.recordIds {
 		binary.BigEndian.PutUint64(l.frame.Data[ridOffset+(ValueTypeSize*i):], uint64(l.recordIds[i]))
@@ -282,9 +281,9 @@ func (l *leafNode) toBytes() error {
 }
 
 /*
-Deserialize leaf page into leaf node structure.
+Deserialize leaf page (in bytes) into a leaf node structure.
 This method translates a leaf page encoded as a byte sequence into a
-leaf node (Go data structures).
+leaf node data structure.
 */
 func (l *leafNode) fromBytes(data []byte) (BPlusTreeNode, error) {
 	if len(data) < LeafPageHeaderSize {
@@ -298,7 +297,7 @@ func (l *leafNode) fromBytes(data []byte) (BPlusTreeNode, error) {
 
 	currentSize := binary.BigEndian.Uint32(data[4:8])
 	// maxSize := binary.BigEndian.Uint32(data[8:12])
-	rightSibling := binary.BigEndian.Uint32(data[12:16])
+	UrightSibling := binary.BigEndian.Uint32(data[12:16])
 	// todo: dynamically determine key type
 	keys, recordIds := []int{}, []int{}
 	keyOffset, ridOffset := LeafPageHeaderSize, LeafPageHeaderSize+(int(currentSize)/2*KeySize)
@@ -315,6 +314,6 @@ func (l *leafNode) fromBytes(data []byte) (BPlusTreeNode, error) {
 	}
 	l.keys = keys
 	l.recordIds = recordIds
-	l.rightSibling = int(rightSibling)
+	l.rightSibling = int(int32(UrightSibling))
 	return l, nil
 }

@@ -58,7 +58,7 @@ type innerNode struct {
 	treeMetadata  *BPlusTreeMetadata
 	bufferManager *memory.BufferPoolManager
 	keys          []int
-	children      []uint64
+	children      []uint64 // page numbers of child nodes
 	rightSibling  int
 	frame         *memory.Frame // page on which this node is serialized on
 }
@@ -83,7 +83,7 @@ func newInnerNode(b *memory.BufferPoolManager, m *BPlusTreeMetadata) *innerNode 
 	}
 }
 
-func newInnerNodeFromPage(b *memory.BufferPoolManager, m *BPlusTreeMetadata, f *memory.Frame) *innerNode {
+func createInnerNodeFromPage(b *memory.BufferPoolManager, m *BPlusTreeMetadata, f *memory.Frame) *innerNode {
 	inner := &innerNode{
 		treeMetadata:  m,
 		bufferManager: b,
@@ -176,10 +176,10 @@ func (n *innerNode) search(k int) (*leafNode, bool) {
 		// load next page into memory
 		currPageFrame, _ = n.bufferManager.GetPage(nextPageId) // load next page into memory, if not already in memory
 		if getPageType(currPageFrame) == 0 {
-			currNode = newInnerNodeFromPage(n.bufferManager, n.treeMetadata, currPageFrame)
+			currNode = createInnerNodeFromPage(n.bufferManager, n.treeMetadata, currPageFrame)
 		}
 	}
-	return newLeafNodeFromPage(n.bufferManager, n.treeMetadata, currPageFrame).search(k)
+	return createLeafNodeFromPage(n.bufferManager, n.treeMetadata, currPageFrame).search(k)
 }
 
 // Insert a key and page pointer pair into node.

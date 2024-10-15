@@ -70,23 +70,42 @@ type BPlusTreeNode interface {
 }
 
 // Deserialize root page into a b+ tree node that is loaded into the buffer
-func fromBytes(b *memory.BufferPoolManager, t *BPlusTreeMetadata) (BPlusTreeNode, error) {
-	page, err := b.GetPage(t.rootPageId)
+func fromBytes(b *memory.BufferPoolManager, m *BPlusTreeMetadata) (BPlusTreeNode, error) {
+	page, err := b.GetPage(m.rootPageId)
 	if err != nil {
 		return nil, err
 	}
 	var node BPlusTreeNode
-	pageType := binary.BigEndian.Uint32(page.Data[0:])
-	if int(pageType) == 1 {
-		node, _ = newLeafNode(b, t).fromBytes(page.Data)
-	} else if int(pageType) == 0 {
-		node, _ = newInnerNode(b, t).fromBytes(page.Data)
+	pageType := int(getPageType(page))
+	if pageType == 1 {
+		node, _ = newLeafNode(b, m).fromBytes(page.Data)
+	} else if pageType == 0 {
+		node, _ = newInnerNode(b, m).fromBytes(page.Data)
 	} else {
 		log.Printf("Unexpected byte in page header %d", pageType)
 		return nil, ErrInvalidPageTypeHeader
 	}
 	page.Unpin()
 	return node, err
+}
+
+func fetchNodeByPage(b *memory.BufferPoolManager, m *BPlusTreeMetadata, pageId int) (BPlusTreeNode, error) {
+	f, err := b.GetPage(pageId)
+	if err != nil {
+		log.Printf("unable to fetch node frame: %+v", err)
+		return nil, err
+	}
+	var node BPlusTreeNode
+	switch pageType := int(getPageType(f)); pageType {
+	case 1: // Leaf node
+		node = createLeafNodeFromPage(b, m, f)
+	case 0: // Inner node
+		node = createInnerNodeFromPage(b, m, f)
+	default:
+		log.Printf("Unknown node type: %d", pageType)
+		return nil, fmt.Errorf("unknown node type: %d", pageType)
+	}
+	return node, nil
 }
 
 // Returns 1 if page is leaf, 0 if inner and -1 if invalid page

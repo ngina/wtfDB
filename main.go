@@ -25,4 +25,5 @@ func main() {
 		t.Insert(100+i, rand.Intn(59))
 	}
 	bptree = t
+	index.PrettyPrint(t.Root, 0, "", false)
 }

@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"strings"
 	"wtfDB/memory"
 )
 
@@ -36,7 +37,7 @@ type BPlusTreeMetadata struct {
 }
 
 type bPlusTree struct {
-	root     BPlusTreeNode             // root of the B+ tree
+	Root     BPlusTreeNode             // root of the B+ tree
 	bpm      *memory.BufferPoolManager // buffer pool manager
 	metadata *BPlusTreeMetadata
 }
@@ -61,7 +62,7 @@ func NewBPlusTree(indexName string, b *memory.BufferPoolManager, m *BPlusTreeMet
 		if err != nil {
 			return nil, err
 		}
-		bptree.root = n
+		bptree.Root = n
 	} else {
 		// case 2: we need to create the root page
 		leaf := newLeafNode(b, m)
@@ -78,14 +79,14 @@ func (t *bPlusTree) Insert(k int, v int) bool {
 	// what type is the new root?
 	// update root helper can be useful here
 	fmt.Printf("inserting k,v pair: %+v,%+v\n", k, v)
-	if t.root.getMaxSize() <= t.root.getSize() {
+	if t.Root.getMaxSize() <= t.Root.getSize() {
 		// insertion into full root node will cause an overflow
 		// case 1. root is a leaf, therefore we need to create a new inner node
-		if t.root.isLeaf() { // nit: type assertion with ok comma idiom ?
+		if t.Root.isLeaf() { // nit: type assertion with ok comma idiom ?
 			fmt.Println("root is a leaf")
 			newRoot := newInnerNode(t.bpm, t.metadata)
 			t.metadata.seen = append(t.metadata.seen, newRoot) // append new root to ancestor stack maintained during downward tree traversal
-			l, _ := t.root.(*leafNode)
+			l, _ := t.Root.(*leafNode)
 			// set first pointer in the new root to point to the subtree holding less than the first index entry
 			newRoot.children = append(newRoot.children, uint64(l.frame.PageId))
 			// set parent of root leaf L to newroot and update root page id
@@ -103,8 +104,8 @@ func (t *bPlusTree) Insert(k int, v int) bool {
 
 	}
 	// case : root is leaf and root is not full (can insert k/v pair directly into leaf node)
-	if t.root.isLeaf() {
-		return t.root.insert(k, v)
+	if t.Root.isLeaf() {
+		return t.Root.insert(k, v)
 	}
 
 	// case : root is inner node and root is not full
@@ -112,17 +113,17 @@ func (t *bPlusTree) Insert(k int, v int) bool {
 	// 4. insert k,v pair into leaf node
 	fmt.Println("BPTree: current root is an inner node...")
 	fmt.Printf("BPTree: inserting [%+v,%+v] into tree\n", k, v)
-	leafNode, _ := t.root.(*innerNode).search(k)
+	leafNode, _ := t.Root.(*innerNode).search(k)
 	return leafNode.insert(k, v)
 }
 
 // Return the value associated with a given key
 func (t *bPlusTree) Get(k int) (int, bool) {
-	return t.root.get(k)
+	return t.Root.get(k)
 }
 
 func (t *bPlusTree) updateRoot(newRoot BPlusTreeNode) {
-	t.root = newRoot
+	t.Root = newRoot
 	t.metadata.rootPageId = newRoot.getPageId()
 }
 
@@ -147,4 +148,58 @@ func (m *BPlusTreeMetadata) removeAncestor() *innerNode {
 		return val
 	}
 	return nil
+}
+
+// PrettyPrint recursively prints the B+ tree structure
+func PrettyPrint(node BPlusTreeNode, level int, prefix string, isLast bool) {
+	connector := "├── "   // Regular connector
+	childPrefix := "│   " // Prefix for children at each level
+
+	// If is last child
+	if isLast {
+		connector = "└── "   // Change to backtick for the last child
+		childPrefix = "    " // No vertical line for the last child
+	}
+
+	var boxTop, boxBottom, boxContent strings.Builder
+	// Define the box characters
+	boxTop.WriteString("┌───────────────┐\n")
+	boxBottom.WriteString("└───────────────┘\n")
+
+	switch n := node.(type) {
+	case *innerNode:
+		boxContent.WriteString(fmt.Sprintf(" Inner Node:\n Keys: %v\n Page Pointers: %v\n", n.keys[1:], n.children))
+		count := 15 - len(boxContent.String())
+		if count < 0 {
+			count = 0
+		}
+
+		// Print the inner node's keys and children
+		fmt.Printf("%s%s", prefix, boxTop.String())
+		fmt.Printf("%s%s%s", prefix, boxContent.String(), strings.Repeat(" ", count))
+		fmt.Printf("%s%s", prefix, boxBottom.String())
+
+		// Recursively print each child
+		for i, childPageNum := range n.children {
+			isLastChild := i == len(n.children)-1
+			childNode, _ := fetchNodeByPage(n.bufferManager, n.treeMetadata, int(childPageNum))
+			PrettyPrint(childNode, level+1, prefix+childPrefix, isLastChild)
+		}
+	case *leafNode:
+		// fmt.Printf("%s%sLeaf Node: Keys: %v, RecordIds: %v, RightSibling: %d, PageId: %d\n",
+		// 	indent, connector, n.keys, n.recordIds, n.rightSibling, n.frame.PageId)
+
+		boxContent.WriteString(fmt.Sprintf(" Leaf Node:\n %sKeys: %v\n %sPageId: %v\n", connector, n.keys, connector, n.frame.PageId))
+		count := 15 - len(boxContent.String())
+		if count < 0 {
+			count = 0
+		}
+
+		// Print the leaf node's keys and record IDs
+		fmt.Printf("%s%s", prefix, boxTop.String())
+		fmt.Printf("%s%s%s", prefix, boxContent.String(), strings.Repeat(" ", count))
+		fmt.Printf("%s%s", prefix, boxBottom.String())
+	default:
+		fmt.Printf("%s%sUnknown Node Type\n", prefix, connector)
+	}
 }
