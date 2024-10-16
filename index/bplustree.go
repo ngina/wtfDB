@@ -37,9 +37,9 @@ type BPlusTreeMetadata struct {
 }
 
 type bPlusTree struct {
-	Root     BPlusTreeNode             // root of the B+ tree
-	bpm      *memory.BufferPoolManager // buffer pool manager
-	metadata *BPlusTreeMetadata
+	Root          BPlusTreeNode             // root of the B+ tree
+	bufferManager *memory.BufferPoolManager // buffer pool manager
+	metadata      *BPlusTreeMetadata
 }
 
 func NewBPlusTreeMetadata(indexName string) *BPlusTreeMetadata {
@@ -53,16 +53,16 @@ func NewBPlusTreeMetadata(indexName string) *BPlusTreeMetadata {
 
 func NewBPlusTree(indexName string, b *memory.BufferPoolManager, m *BPlusTreeMetadata) (*bPlusTree, error) {
 	bptree := &bPlusTree{
-		metadata: m,
-		bpm:      b,
+		metadata:      m,
+		bufferManager: b,
 	}
 	// case 1. there exists a valid root page id
 	if m.rootPageId != memory.InvalidPageId {
-		n, err := fromBytes(b, m)
+		node, err := fromBytes(b, m)
 		if err != nil {
 			return nil, err
 		}
-		bptree.Root = n
+		bptree.Root = node
 	} else {
 		// case 2: we need to create the root page
 		leaf := newLeafNode(b, m)
@@ -84,7 +84,7 @@ func (t *bPlusTree) Insert(k int, v int) bool {
 		// case 1. root is a leaf, therefore we need to create a new inner node
 		if t.Root.isLeaf() { // nit: type assertion with ok comma idiom ?
 			fmt.Println("root is a leaf")
-			newRoot := newInnerNode(t.bpm, t.metadata)
+			newRoot := newInnerNode(t.bufferManager, t.metadata)
 			t.metadata.seen = append(t.metadata.seen, newRoot) // append new root to ancestor stack maintained during downward tree traversal
 			l, _ := t.Root.(*leafNode)
 			// set first pointer in the new root to point to the subtree holding less than the first index entry
@@ -92,7 +92,9 @@ func (t *bPlusTree) Insert(k int, v int) bool {
 			// set parent of root leaf L to newroot and update root page id
 			t.updateRoot(newRoot)
 			// perform insertion into current root node
-			return l.insert(k, v)
+			inserted := l.insert(k, v)
+			t.bufferManager.Unpin(l.frame)
+			return inserted
 		}
 
 		// case 2: root node is an inner node, therefore we need to create a new inner node
@@ -105,7 +107,9 @@ func (t *bPlusTree) Insert(k int, v int) bool {
 	}
 	// case : root is leaf and root is not full (can insert k/v pair directly into leaf node)
 	if t.Root.isLeaf() {
-		return t.Root.insert(k, v)
+		inserted := t.Root.insert(k, v)
+		t.bufferManager.Unpin(t.Root.(*leafNode).frame)
+		return inserted
 	}
 
 	// case : root is inner node and root is not full
@@ -114,6 +118,7 @@ func (t *bPlusTree) Insert(k int, v int) bool {
 	fmt.Println("BPTree: current root is an inner node...")
 	fmt.Printf("BPTree: inserting [%+v,%+v] into tree\n", k, v)
 	leafNode, _ := t.Root.(*innerNode).search(k)
+	t.bufferManager.Unpin(leafNode.frame)
 	return leafNode.insert(k, v)
 }
 
@@ -168,7 +173,7 @@ func PrettyPrint(node BPlusTreeNode, level int, prefix string, isLast bool) {
 
 	switch n := node.(type) {
 	case *innerNode:
-		boxContent.WriteString(fmt.Sprintf(" Inner Node:\n Keys: %v\n Page Pointers: %v\n", n.keys[1:], n.children))
+		boxContent.WriteString(fmt.Sprintf(" Inner Node:\n Keys: %v\n Children: %v\n", n.keys[1:], n.children))
 		count := 15 - len(boxContent.String())
 		if count < 0 {
 			count = 0

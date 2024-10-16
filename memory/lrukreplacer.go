@@ -76,17 +76,19 @@ Todo: limit the access history size to k
 */
 func (lruK *LruKReplacer) recordAccess(frameId int) {
 	current_timestamp := time.Now().UTC().UnixMilli()
+	// Check if key exists and retrieve value
 	_, ok := lruK.metadataStore[frameId]
 	if ok {
 		m := lruK.metadataStore[frameId]
 		m.history = append(m.history, current_timestamp)
 		lruK.metadataStore[frameId] = m
 		lruK.lru.MoveToBack(m.e)
-	} else {
+	} else { // create a new metadata entry since page does not exist in the metadata store
 		e := lruK.lru.PushBack(frameId)
 		lruK.metadataStore[frameId] = LruKFrameAccessMetadata{
-			history: []int64{current_timestamp},
-			e:       e,
+			history:     []int64{current_timestamp},
+			e:           e,
+			isEvictable: false,
 		}
 	}
 }
@@ -99,6 +101,7 @@ When the pin count of a page hits 0, its corresponding frame should be marked as
 */
 func (lruK *LruKReplacer) setEvictable(frameId int, setEvictable bool) {
 	if m, ok := lruK.metadataStore[frameId]; ok {
+		// fmt.Printf("set evictable [%v] frame id: %d\n", setEvictable, frameId)
 		if m.isEvictable && !setEvictable {
 			m.isEvictable = setEvictable
 			lruK.metadataStore[frameId] = m
@@ -158,6 +161,7 @@ func (lruK *LruKReplacer) maxBackwardKDistance() int {
 	for k := range lruK.metadataStore {
 		if !lruK.metadataStore[k].isEvictable {
 			fmt.Println("frame is non-evictable, ignore")
+			// fmt.Printf("lruK frame: %+v", lruK.metadataStore[k])
 			continue
 		}
 		backwardKDist := lruK.getBackwardKDistance(k)

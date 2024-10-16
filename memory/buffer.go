@@ -66,17 +66,23 @@ func (f *Frame) IsPinned() bool {
 	return f.pinCount > 0
 }
 
-func (f *Frame) Pin() {
+func (m *BufferPoolManager) Pin(f *Frame) {
+	// fmt.Printf("Buffer manager: pinning frame: frameId=%d, pinCount=%d\n", f.Id, f.pinCount)
 	f.pinCount++
+	// fmt.Printf("Buffer manager: updated pin count: %d\n", f.pinCount)
+	m.lrukreplacer.recordAccess(f.Id)
+	m.lrukreplacer.setEvictable(f.Id, false)
 }
 
 // Unpin buffer frame.
-func (f *Frame) Unpin() error {
-	if f.pinCount == 0 {
-		return fmt.Errorf("frame is unpinned")
+func (m *BufferPoolManager) Unpin(f *Frame) {
+	// fmt.Printf("Buffer manager: unpin frame: frameId=%d, pinCount=%d\n", f.Id, f.pinCount)
+	if f.pinCount <= 0 {
+		return
 	}
 	f.pinCount--
-	return nil
+	m.lrukreplacer.setEvictable(f.Id, f.pinCount == 0)
+	// fmt.Printf("Buffer manager: unpinned frame: frameId=%d, pinCount=%d, isEvictable=%v\n", f.Id, f.pinCount, m.lrukreplacer.metadataStore[f.Id].isEvictable)
 }
 
 func (f *Frame) ZeroBuffer() {
@@ -102,13 +108,20 @@ func NewBufferPoolManager(dsm io.DiskManager, size int) *BufferPoolManager {
 	}
 }
 
+/*
+Creates a new pinned page in memory.
+The page is loaded onto a buffer frame.
+*/
 func (m *BufferPoolManager) GetNewPageFrame() (*Frame, error) {
 	return m.GetPage(m.newPage())
 }
 
-// Creates a new page that is loaded onto a buffer frame.
-// A new page is allocated via the nextPageId counter.
-// Returns the page id of the newly created page or an InvalidPageId if unable to create a new page.
+/*
+Creates a new page that is loaded onto a buffer frame.
+A new page is allocated via the nextPageId counter.
+Returns the page id of the newly created page or an InvalidPageId if unable to create a new page.
+The page is not pinned in memory.
+*/
 func (m *BufferPoolManager) newPage() int {
 	newPageId := m.nextPageId
 	m.nextPageId++
@@ -119,7 +132,6 @@ func (m *BufferPoolManager) newPage() int {
 		m.freeFrames = slices.Delete(m.freeFrames, 0, 1) // todo: maybe use a queue/stack ?
 		m.pageToFrame[newPageId] = frameIdx
 		m.frames[frameIdx].PageId = newPageId
-		// m.frames[frameIdx].pin()
 	} else {
 		// no available frames. evict a frame
 		isEvicted, i := m.evict()
@@ -131,13 +143,10 @@ func (m *BufferPoolManager) newPage() int {
 			PageId: newPageId,
 		}
 		m.pageToFrame[newPageId] = i
-		// m.frames[i].pin()
 	}
 	return newPageId
 }
 
-/*
- */
 func (m *BufferPoolManager) DeletePage(pageId int) (bool, error) {
 	return false, nil
 }
@@ -152,7 +161,7 @@ func (m *BufferPoolManager) GetPage(pageId int) (*Frame, error) {
 	if err != nil {
 		return nil, err
 	}
-	f.Pin()
+	m.Pin(f)
 	return f, nil
 }
 

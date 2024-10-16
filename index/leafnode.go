@@ -154,6 +154,7 @@ func (l *leafNode) insert(k int, rid int) bool {
 	if l == nil {
 		return false
 	}
+	l.bufferManager.Pin(l.frame)
 
 	fmt.Printf("Leafnode: inserting k,v pair: %d, %d\n", k, rid)
 	// case 1. l has enough space
@@ -201,8 +202,9 @@ func (l *leafNode) insert(k int, rid int) bool {
 	fmt.Printf("Leafnode: existing leafnode frame: %+v\n\n", *l.frame)
 	fmt.Printf("After split: buffer manager: %+v\n", *l.bufferManager)
 
-	// copy new split key into parent inner node
+	// copy new split key into parent and unpin parent node after update
 	l.getParent().insert(newL.keys[0], newL.frame.PageId)
+	l.bufferManager.Unpin(l.getParent().frame)
 	return true
 }
 

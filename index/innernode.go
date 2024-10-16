@@ -64,7 +64,7 @@ type innerNode struct {
 }
 
 /*
-Returns a pointer to a new inner node.
+Returns a pointer to a new inner node. The new node is loaded onto a pinned buffer frame.
 This method persists the new inner node onto a buffer frame.
 */
 func newInnerNode(b *memory.BufferPoolManager, m *BPlusTreeMetadata) *innerNode {
@@ -174,7 +174,7 @@ func (n *innerNode) search(k int) (*leafNode, bool) {
 		}
 		fmt.Printf("Inner node: got corresponding page pointer: %d\n", nextPageId)
 		// load next page into memory
-		currPageFrame, _ = n.bufferManager.GetPage(nextPageId) // load next page into memory, if not already in memory
+		currPageFrame, _ = n.bufferManager.GetPage(nextPageId) // load next page into memory and pin it
 		if getPageType(currPageFrame) == 0 {
 			currNode = createInnerNodeFromPage(n.bufferManager, n.treeMetadata, currPageFrame)
 		}
@@ -194,6 +194,9 @@ func (n *innerNode) insert(key int, pageId int) bool {
 		return false
 	}
 
+	// Pin frame because it is being written to.
+	n.bufferManager.Pin(n.frame)
+
 	// case 1. internal node is not full
 	if n.getMaxSize()-n.getSize() >= 1 {
 		fmt.Printf("Innernode: is not full inserting k,v pair: %d,%d\n", key, pageId)
@@ -211,25 +214,27 @@ func (n *innerNode) insert(key int, pageId int) bool {
 	}
 	newNode := newInnerNode(n.bufferManager, n.treeMetadata)
 	newNode.frame = newPageFrame
-
 	// create new right node and redistribute keys
 	n.sInsert(key, uint64(pageId))
 	mid := len(n.keys) / 2
 	newNode.keys = n.keys[mid+1:]
 	newNode.children = n.children[mid+1:]
 	newNode.rightSibling = NonExistentSiblingLink
-	// todo: set parent pointer
-	splitKey := n.keys[mid]
+
 	// update the split node
 	n.keys = n.keys[:mid]
 	n.children = n.children[:mid]
 	n.rightSibling = newPageFrame.PageId
 
-	n.getParent().insert(splitKey, newNode.frame.PageId)
-
 	// persist changes to frame/page in memory
 	newNode.toBytes()
 	n.toBytes()
+
+	// copy new separator key into parent and unpin parent node after update
+	// todo: set parent pointer
+	separatorKey := n.keys[mid]
+	n.getParent().insert(separatorKey, newNode.frame.PageId)
+	n.bufferManager.Unpin(n.getParent().frame)
 	return true
 }
 

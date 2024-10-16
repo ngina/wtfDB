@@ -69,7 +69,7 @@ type BPlusTreeNode interface {
 	fromBytes([]byte) (BPlusTreeNode, error)
 }
 
-// Deserialize root page into a b+ tree node that is loaded into the buffer
+// Deserialize root page into a b+ tree node that is pinned and loaded into a buffer frame
 func fromBytes(b *memory.BufferPoolManager, m *BPlusTreeMetadata) (BPlusTreeNode, error) {
 	page, err := b.GetPage(m.rootPageId)
 	if err != nil {
@@ -85,7 +85,6 @@ func fromBytes(b *memory.BufferPoolManager, m *BPlusTreeMetadata) (BPlusTreeNode
 		log.Printf("Unexpected byte in page header %d", pageType)
 		return nil, ErrInvalidPageTypeHeader
 	}
-	page.Unpin()
 	return node, err
 }
 
